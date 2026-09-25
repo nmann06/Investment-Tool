@@ -21,7 +21,19 @@ Open `http://127.0.0.1:4173` while the server is running, then choose **Investme
 - Current P/E, normal (median) P/E, fair value, margin of safety, EPS growth, dividend yield, payout ratio and annualized return over the window.
 - Year-by-year table of diluted EPS, EPS change, dividends, payout ratio, price range and average P/E.
 - Editable five-year scenario (EPS growth and exit P/E) with implied price and total return.
-- Real U.S. companies loaded on demand, plus four **synthetic** demo companies and CSV import.
+- Real U.S. companies loaded on demand, in three levels (below), plus CSV import.
+
+## Data levels
+
+**Load ticker** reads only SEC filings, so it uses no price requests. Two buttons next to the company name add prices when you want them:
+
+| Level | Price requests | Adds |
+| --- | --- | --- |
+| SEC only (default) | 0 | Growth, margins, ROIC, balance sheet, ten-year statements and DCF value |
+| Add current price | 1 | Market cap, EV, P/E, P/FCF, FCF yield, EV multiples, WACC weights and DCF vs. price |
+| Load price chart | up to 10 (1 to refresh) | Price-vs-earnings chart, normal P/E, window returns, scenario builder and beta |
+
+The sidebar shows how many of the day's price requests are left. Links can choose a level: `/app?ticker=AAPL&depth=full`.
 - Holdings saved in the browser's local storage. Loaded tickers are cached in the browser for a week.
 
 ## Real market data

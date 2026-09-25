@@ -22,7 +22,6 @@ const files = {
 // The investment tool and its API sit behind the password; the personal site stays public.
 const protectedFiles = new Set(['/app', '/research.html', '/styles.css', '/app.js', '/math.js', '/sample-data.csv']);
 const cache = new Map();
-const peerCache = new Map();
 const inFlight = new Map();
 let market = null;
 let marketInFlight = null;
@@ -155,58 +154,55 @@ async function handleMarket(request, response) {
   return sendJson(response, 200, { riskFree: market.riskFree, benchmark: market.benchmark });
 }
 
-// Peers only need the latest price, so they fetch a single page of history.
-async function handlePeer(request, response, symbol, key) {
-  const full = cache.get(symbol);
-  if (full && Date.now() - full.time < cacheDurationMs) return sendJson(response, 200, full.company);
-  const saved = peerCache.get(symbol);
-  if (saved && Date.now() - saved.time < cacheDurationMs) return sendJson(response, 200, saved.company);
-  if (!allowLookup(request, 1)) {
-    if (saved || full) return sendJson(response, 200, { ...(saved || full).company, stale: true });
-    return sendJson(response, 429, { error: 'Today’s live-data allowance has been used. Try again tomorrow.' });
-  }
-  try {
-    const company = await fetchCompany(symbol, key, { userAgent: setting('SEC_USER_AGENT'), maxPages: 1, onRequest: () => providerCalls.push(Date.now()) });
-    peerCache.set(symbol, { time: Date.now(), company });
-    return sendJson(response, 200, company);
-  } catch (error) {
-    const status = error instanceof ProviderError ? error.status : 502;
-    return sendJson(response, status, { error: error instanceof ProviderError ? error.message : 'Could not load market data.' });
-  }
-}
+// Three levels of data per ticker:
+//   sec   — SEC filings only, no price requests
+//   price — plus about a year of prices (1 request), enough for current valuation
+//   full  — plus all price history for the chart and beta (~10 requests new, 1 to refresh)
+const DEPTHS = { sec: 0, price: 1, full: 2 };
+const depthOf = (company) => DEPTHS[company?.depth] ?? DEPTHS.full;
 
 async function handleCompany(request, response, url) {
   if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
   const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) return sendJson(response, 400, { error: 'Enter a valid ticker.' });
-  const key = apiKey();
-  if (!key) return sendJson(response, 503, { error: 'Add FINANCIALDATA_API_KEY to the server configuration.' });
-  if (url.searchParams.get('depth') === 'peer') return handlePeer(request, response, symbol, key);
+  let depth = url.searchParams.get('depth') || 'full';
+  if (depth === 'peer') depth = 'price';
+  if (!(depth in DEPTHS)) return sendJson(response, 400, { error: 'Unknown data depth.' });
   const saved = cache.get(symbol);
-  if (saved && Date.now() - saved.time < cacheDurationMs) return sendJson(response, 200, saved.company);
+  const fresh = saved && Date.now() - saved.time < cacheDurationMs;
+  if (fresh && depthOf(saved.company) >= DEPTHS[depth]) return sendJson(response, 200, saved.company);
+  const key = apiKey();
+  if (depth !== 'sec' && !key) return sendJson(response, 503, { error: 'Add FINANCIALDATA_API_KEY to the server configuration.' });
   const known = priceHistory.get(symbol) || [];
-  if (!inFlight.has(symbol) && !allowLookup(request, known.length ? 1 : MAX_PAGES)) {
-    if (saved) return sendJson(response, 200, { ...saved.company, stale: true });
-    return sendJson(response, 429, { error: 'Today’s live-data allowance has been used. Try again tomorrow.' });
+  // With stored history, the full chart costs the same single request as the latest price.
+  if (depth === 'price' && known.length) depth = 'full';
+  const cost = depth === 'sec' ? 0 : depth === 'price' || known.length ? 1 : MAX_PAGES;
+  const flight = `${symbol}:${depth}`;
+  if (!inFlight.has(flight) && cost && !allowLookup(request, cost)) {
+    if (saved && depthOf(saved.company) >= DEPTHS[depth]) return sendJson(response, 200, { ...saved.company, stale: true });
+    return sendJson(response, 429, { error: 'Today’s price-data allowance has been used. SEC data is still available; try prices again tomorrow.' });
   }
   try {
-    if (!inFlight.has(symbol)) {
-      inFlight.set(symbol, fetchCompany(symbol, key, {
+    if (!inFlight.has(flight)) {
+      inFlight.set(flight, fetchCompany(symbol, key, {
         userAgent: setting('SEC_USER_AGENT'),
-        knownPrices: known,
+        maxPages: depth === 'sec' ? 0 : depth === 'price' ? 1 : MAX_PAGES,
+        knownPrices: depth === 'full' ? known : [],
         onRequest: () => providerCalls.push(Date.now()),
-        onPrices: (records) => keepPrices(symbol, records)
+        // Only complete histories are kept; a one-page fetch would make later refreshes look complete.
+        onPrices: depth === 'full' ? (records) => keepPrices(symbol, records) : undefined
       }));
     }
-    const company = await inFlight.get(symbol);
-    cache.set(symbol, { time: Date.now(), company });
+    const company = await inFlight.get(flight);
+    const current = cache.get(symbol);
+    if (!current || Date.now() - current.time >= cacheDurationMs || depthOf(company) >= depthOf(current.company)) cache.set(symbol, { time: Date.now(), company });
     return sendJson(response, 200, company);
   } catch (error) {
-    if (saved) return sendJson(response, 200, { ...saved.company, stale: true });
+    if (saved && depthOf(saved.company) >= DEPTHS[depth]) return sendJson(response, 200, { ...saved.company, stale: true });
     const status = error instanceof ProviderError ? error.status : 502;
     return sendJson(response, status, { error: error instanceof ProviderError ? error.message : 'Could not load market data.' });
   } finally {
-    inFlight.delete(symbol);
+    inFlight.delete(flight);
   }
 }
 
@@ -222,7 +218,7 @@ http.createServer(async (request, response) => {
   }
   if (url.pathname === '/api/status') {
     if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
-    return sendJson(response, 200, { provider: 'FinancialData.net + SEC EDGAR', configured: Boolean(apiKey()), fundamentals: true, signOut: authRequired() });
+    return sendJson(response, 200, { provider: 'FinancialData.net + SEC EDGAR', configured: Boolean(apiKey()), fundamentals: true, signOut: authRequired(), priceRequestsLeft: providerBudgetLeft() });
   }
   if (url.pathname === '/api/company') return handleCompany(request, response, url);
   if (url.pathname === '/api/market') return handleMarket(request, response);

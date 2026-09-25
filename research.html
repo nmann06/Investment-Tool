@@ -22,7 +22,7 @@
         <a class="site-back" href="/">← Back to website</a>
         <a class="site-back" id="sign-out" href="/logout" hidden>Sign out</a>
         <div class="data-status"><span class="status-dot"></span> <span id="sidebar-data-status">Checking data connection</span></div>
-        <p id="sidebar-data-help">Explore the tool with synthetic examples, or load a real U.S. ticker.</p>
+        <p id="sidebar-data-help">Load a U.S. ticker to begin.</p>
       </div>
     </aside>
 
@@ -35,16 +35,19 @@
       <section id="research-view" class="view">
         <div class="page-heading">
           <div><div class="eyebrow">FUNDAMENTALS & PRICE</div><h1>Find the story <em>behind</em> the price.</h1><p>See how market price compares with a company's own earnings history.</p></div>
-          <div class="demo-pill"><span class="status-dot"></span> <span id="source-badge">SYNTHETIC DEMO DATA</span></div>
+          <div class="demo-pill"><span class="status-dot"></span> <span id="source-badge">SEC EDGAR DATA</span></div>
         </div>
 
         <div class="ticker-bar">
           <label class="search-box"><span class="search-icon">⌕</span><input id="ticker-search" type="search" placeholder="Enter a U.S. ticker, e.g. AAPL" autocomplete="off" aria-label="Search a company or ticker"><kbd>⌘ K</kbd></label>
-          <button class="primary-button" id="load-ticker" type="button">Load real ticker</button><div class="ticker-chips" id="ticker-chips"></div>
+          <button class="primary-button" id="load-ticker" type="button" title="Reads SEC filings only; no price requests">Load ticker</button><div class="ticker-chips" id="ticker-chips"></div>
         </div>
         <div id="api-message" class="api-message" role="status" aria-live="polite"></div>
 
-        <div class="company-line"><div class="company-identity"><div class="company-avatar" id="company-avatar">N</div><div><div class="company-name-line"><h2 id="company-name">Northstar Systems</h2><span class="ticker-tag" id="company-ticker">NSTR</span></div><div class="company-meta" id="company-meta">Technology · Synthetic company</div></div></div><button class="outline-button" id="add-holding-open">+ Add holding</button></div>
+        <div class="panel empty-state" id="welcome-empty" hidden><span class="empty-icon">⌕</span><strong>Enter a U.S. ticker to begin</strong>Loading a ticker reads the company's SEC filings, with no price requests used. Add the current price or the full price chart when you want them.</div>
+        <div class="company-line" id="research-company"><div class="company-identity"><div class="company-avatar" id="company-avatar">—</div><div><div class="company-name-line"><h2 id="company-name">—</h2><span class="ticker-tag" id="company-ticker">—</span></div><div class="company-meta" id="company-meta">—</div></div></div><div class="company-actions"><div class="depth-actions"></div><button class="outline-button" id="add-holding-open">+ Add holding</button></div></div>
+        <div class="panel empty-state" id="chart-empty" hidden><span class="empty-icon">◫</span><strong>The price chart needs full price history</strong><span id="chart-empty-text">This company's SEC data is loaded. Its financial statements and valuation are on the Fundamentals page.</span><div class="depth-actions empty-actions"></div></div>
+        <div id="research-content">
 
         <div class="metrics-grid">
           <article class="metric-card"><div class="metric-label">LATEST PRICE <span>↗</span></div><div class="metric-value" id="metric-price">—</div><div class="metric-sub" id="metric-price-date">—</div></article>
@@ -66,13 +69,15 @@
         <section class="panel annual-panel" id="annual-panel"><div class="panel-header"><div><div class="panel-kicker">YEAR BY YEAR</div><h3>Earnings, dividends &amp; valuation</h3><p id="annual-subtitle">Fiscal-year figures on today's share basis</p></div></div><div class="table-scroll"><table class="annual-table" id="annual-table"></table></div></section>
 
         <section class="panel forecast-panel" id="forecast-panel"><div class="forecast-intro"><div class="panel-kicker">SCENARIO BUILDER</div><h3>What could five years look like?</h3><p>Explore a simple price return scenario. Your assumptions are editable and are not forecasts.</p></div><div class="forecast-controls"><label>EPS growth / year <div class="input-suffix"><input id="growth-input" type="number" min="-50" max="100" step="0.5" value="8"><span>%</span></div></label><label>Exit P/E <div class="input-suffix"><input id="exit-pe-input" type="number" min="1" max="100" step="0.5"><span>×</span></div></label></div><div class="forecast-result"><span>IMPLIED ANNUAL PRICE RETURN</span><strong id="forecast-return">—</strong><small id="forecast-price">Projected price —</small><small id="forecast-total">With dividends —</small></div></section>
-        <div class="disclaimer">Research aid only. Demo companies and prices are synthetic. Real tickers use month-end closing prices from FinancialData.net (not live quotes) and reported GAAP diluted EPS and dividends from SEC EDGAR filings. GAAP earnings include one-time items, and split adjustments are inferred from restated filings. This is not investment advice.</div>
+        </div>
+        <div class="disclaimer">Research aid only. Real tickers use month-end closing prices from FinancialData.net (not live quotes) and reported GAAP diluted EPS and dividends from SEC EDGAR filings. GAAP earnings include one-time items, and split adjustments are inferred from restated filings. This is not investment advice.</div>
       </section>
 
       <section id="fundamentals-view" class="view" hidden>
         <div class="page-heading"><div><div class="eyebrow">QUALITY, VALUE &amp; COST OF CAPITAL</div><h1>Look <em>under the hood.</em></h1><p>Growth, margins, cash flow, returns on capital and valuation, calculated from the company's own SEC filings.</p></div><div class="demo-pill"><span class="status-dot"></span> SEC EDGAR · FRED</div></div>
-        <div class="company-line"><div class="company-identity"><div class="company-avatar" id="fund-avatar">N</div><div><div class="company-name-line"><h2 id="fund-name">—</h2><span class="ticker-tag" id="fund-ticker">—</span></div><div class="company-meta" id="fund-meta">—</div></div></div></div>
-        <div class="panel empty-state" id="fund-empty" hidden><span class="empty-icon">▤</span><strong>Fundamentals need SEC filings</strong>Demo and imported companies only include price, EPS and dividends. Load a real ticker such as AAPL on the Research page.</div>
+        <div class="company-line" id="fund-company"><div class="company-identity"><div class="company-avatar" id="fund-avatar">—</div><div><div class="company-name-line"><h2 id="fund-name">—</h2><span class="ticker-tag" id="fund-ticker">—</span></div><div class="company-meta" id="fund-meta">—</div></div></div><div class="company-actions"><div class="depth-actions"></div></div></div>
+        <div class="api-message" id="depth-message" role="status"></div>
+        <div class="panel empty-state" id="fund-empty" hidden><span class="empty-icon">▤</span><strong id="fund-empty-title">Fundamentals need SEC filings</strong><span id="fund-empty-text">Imported companies only include price, EPS and dividends. Load a real ticker such as AAPL on the Research page.</span></div>
         <div id="fund-content">
           <div class="fund-grid">
             <section class="panel fund-panel"><div class="panel-kicker">GROWTH</div><h3>Compounding</h3><div class="snapshot-list" id="fund-growth"></div></section>

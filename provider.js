@@ -299,23 +299,25 @@ function buildFundamentals(usGaap, dei = null) {
   return { eps, dividends, annual, splits, paysDividends: dividendFacts.length > 0, ttm: statements.ttm, balance: statements.balance, sharesOutstanding: statements.sharesOutstanding };
 }
 
-function combine({ symbol, name, sector, prices, fundamentals, fetchedAt = new Date().toISOString() }) {
-  const monthly = monthlyPrices(prices);
-  if (monthly.length < 2) throw new ProviderError(`Not enough price history was found for ${symbol}. Check the ticker.`, 404);
+// depth: 'sec' has no prices, 'price' has about a year of month-end prices, 'full' has all available history.
+function combine({ symbol, name, sector, prices, fundamentals, depth = 'full', fetchedAt = new Date().toISOString() }) {
+  const monthly = depth === 'sec' ? [] : monthlyPrices(prices);
+  if (depth !== 'sec' && monthly.length < 2) throw new ProviderError(`Not enough price history was found for ${symbol}. Check the ticker.`, 404);
   const { eps, dividends, annual, splits, paysDividends, ttm, balance, sharesOutstanding } = fundamentals;
   const rows = monthly.map((row) => {
     const ttmEps = valueAt(eps, row.date);
     const ttmDividend = paysDividends ? valueAt(dividends, row.date) : 0;
     return { date: row.date, price: row.price, eps: ttmEps == null ? null : +ttmEps.toFixed(4), dividend: ttmDividend == null ? 0 : +Math.max(0, ttmDividend).toFixed(4) };
   });
-  if (!rows.some((row) => row.eps != null)) throw new ProviderError(`SEC earnings history for ${symbol} does not overlap the available price history.`, 422);
+  if (depth === 'full' && !rows.some((row) => row.eps != null)) throw new ProviderError(`SEC earnings history for ${symbol} does not overlap the available price history.`, 422);
   const splitNote = splits.length ? ` Detected splits: ${splits.map((split) => `${split.ratio >= 1 ? `${+split.ratio.toFixed(2)}-for-1` : `1-for-${+(1 / split.ratio).toFixed(2)}`} (by ${split.date})`).join(', ')}.` : '';
   return {
     ticker: symbol,
     name,
     sector: sector || 'Unclassified',
     source: 'api',
-    provider: 'FinancialData.net + SEC EDGAR',
+    depth,
+    provider: depth === 'sec' ? 'SEC EDGAR' : 'FinancialData.net + SEC EDGAR',
     currency: 'USD',
     hasFundamentals: true,
     rows,
@@ -398,9 +400,11 @@ async function fetchFredLatest(series, options) {
   return { series, ...observations.at(-1) };
 }
 
+// maxPages 0 skips the price API entirely and returns SEC data only.
 async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPrices = [], onRequest, onPrices, maxPages = MAX_PAGES } = {}) {
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) throw new ProviderError('Invalid ticker.', 400);
-  if (!key) throw new ProviderError('Set FINANCIALDATA_API_KEY on the server.', 503);
+  const depth = maxPages === 0 ? 'sec' : maxPages >= MAX_PAGES ? 'full' : 'price';
+  if (!key && depth !== 'sec') throw new ProviderError('Set FINANCIALDATA_API_KEY on the server.', 503);
   const sec = { fetchImpl, headers: { 'User-Agent': userAgent || 'Lettuce investment research (nathanielmann.ca)', Accept: 'application/json' } };
   const entry = await lookupCik(symbol, sec);
   if (!entry) throw new ProviderError(`${symbol} was not found in SEC filings. Lettuce supports U.S.-listed companies that file 10-K and 10-Q reports.`, 404);
@@ -408,17 +412,18 @@ async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPr
   const [facts, submissions, prices] = await Promise.all([
     fetchJson(`${SEC_FACTS}CIK${cik}.json`, sec, 'SEC EDGAR'),
     fetchJson(`${SEC_SUBMISSIONS}CIK${cik}.json`, sec, 'SEC EDGAR').catch(() => null),
-    fetchPrices(symbol, key, fetchImpl, knownPrices, onRequest, maxPages)
+    depth === 'sec' ? [] : fetchPrices(symbol, key, fetchImpl, knownPrices, onRequest, maxPages)
   ]);
   if (onPrices && prices.length) onPrices(prices);
   if (!facts?.facts?.['us-gaap']) throw new ProviderError(`SEC filings for ${symbol} do not include U.S. GAAP financial data.`, 422);
-  if (!prices.length) throw new ProviderError(`No price history was found for ${symbol}. Check the ticker.`, 404);
+  if (depth !== 'sec' && !prices.length) throw new ProviderError(`No price history was found for ${symbol}. Check the ticker.`, 404);
   const filedName = submissions?.name || entry.title || symbol;
   return combine({
     symbol,
     name: /[a-z]/.test(filedName) ? filedName : filedName.toLowerCase().replace(/\b[a-z]/g, (letter) => letter.toUpperCase()),
     sector: submissions?.sicDescription,
     prices,
+    depth,
     fundamentals: buildFundamentals(facts.facts['us-gaap'], facts.facts.dei)
   });
 }

@@ -14,32 +14,11 @@
   const YEAR_MS = 365.2425 * 86400000;
   const API_CACHE_MS = 7 * 86400000;
 
-  function demoRows(profile) {
-    const rows = [];
-    const startYear = 2006;
-    const months = 249;
-    for (let i = 0; i < months; i++) {
-      const year = startYear + Math.floor(i / 12);
-      const month = i % 12;
-      if (year > 2026 || (year === 2026 && month > 8)) break;
-      const t = i / 12;
-      const cycle = Math.sin(i * 0.11 + profile.phase) * 0.12 + Math.sin(i * 0.035 + profile.phase) * 0.09;
-      const eps = profile.eps * Math.exp(profile.growth * t) * (1 + Math.sin(i * 0.08 + profile.phase) * 0.045);
-      const pe = profile.pe * (1 + cycle + Math.sin(i * 0.025 + profile.phase * 2) * 0.13);
-      const price = Math.max(1, eps * pe);
-      const dividend = profile.eps * Math.exp(profile.growth * Math.floor(t)) * profile.payout;
-      rows.push({ date: `${year}-${String(month + 1).padStart(2, '0')}-01`, price: +price.toFixed(2), eps: +eps.toFixed(3), dividend: +dividend.toFixed(3) });
-    }
-    return rows;
-  }
+  // Data depth for real tickers: SEC filings only, plus the latest price, or plus full price history.
+  const DEPTH = { sec: 0, price: 1, full: 2 };
+  const depthOf = (company) => company?.source !== 'api' ? DEPTH.full : DEPTH[company.depth] ?? DEPTH.full;
 
-  const demoProfiles = [
-    { ticker: 'NSTR', name: 'Northstar Systems', sector: 'Technology', eps: 1.75, growth: .075, pe: 22, phase: .5, payout: .18 },
-    { ticker: 'AVEN', name: 'Avenbrook Health', sector: 'Healthcare', eps: 2.2, growth: .052, pe: 18, phase: 2.1, payout: .42 },
-    { ticker: 'MRDN', name: 'Meridian Retail', sector: 'Consumer', eps: 1.3, growth: .061, pe: 16, phase: 3.5, payout: .33 },
-    { ticker: 'CRST', name: 'Crestline Energy', sector: 'Energy', eps: 3.1, growth: .031, pe: 12, phase: 5.2, payout: .58 }
-  ];
-  const companies = Object.fromEntries(demoProfiles.map((profile) => [profile.ticker, { ...profile, source: 'demo', rows: demoRows(profile) }]));
+  const companies = {};
   const imported = readStore('lattice.imported.v1', {});
   for (const [ticker, company] of Object.entries(imported)) {
     if (company && Array.isArray(company.rows)) companies[ticker] = company;
@@ -54,7 +33,8 @@
   saveStore('lattice.api.v1', apiCache);
   let holdings = readStore('lattice.holdings.v1', []);
   if (!Array.isArray(holdings)) holdings = [];
-  let selectedTicker = companies[readStore('lattice.selected.v1', 'NSTR')] ? readStore('lattice.selected.v1', 'NSTR') : Object.keys(companies)[0];
+  const storedTicker = readStore('lattice.selected.v1', null);
+  let selectedTicker = companies[storedTicker] ? storedTicker : Object.keys(companies)[0] || null;
   let selectedYears = 10;
   let multipleMode = 'graham';
   let view = 'research';
@@ -78,7 +58,7 @@
     const candidates = Object.values(companies).filter((company) => `${company.ticker} ${company.name}`.toLowerCase().includes(query.toLowerCase()));
     $('ticker-chips').innerHTML = candidates.length
       ? candidates.map((company) => `<button class="ticker-chip ${company.ticker === selectedTicker ? 'selected' : ''}" data-ticker="${escapeHtml(company.ticker)}">${escapeHtml(company.ticker)}</button>`).join('')
-      : '<span class="company-meta">Press Enter or Load real ticker to fetch this symbol.</span>';
+      : `<span class="company-meta">${query ? 'Press Enter or Load ticker to fetch this symbol.' : 'No tickers loaded yet.'}</span>`;
   }
 
   function selectTicker(ticker) {
@@ -95,47 +75,62 @@
     if (view === 'fundamentals') renderFundamentals();
   }
 
-  function apiMessage(message, kind = '') {
-    $('api-message').textContent = message;
-    $('api-message').className = `api-message ${kind}`;
-  }
-
   async function checkApiStatus() {
     try {
       const response = await fetch('/api/status');
       if (!response.ok) throw Error('Server unavailable');
       const status = await response.json();
       $('sign-out').hidden = !status.signOut;
-      setText('sidebar-data-status', status.configured ? 'Market data connected' : 'API key needed');
-      setText('sidebar-data-help', status.configured ? 'Enter a U.S. ticker and press Load real ticker. Prices from FinancialData.net, earnings from SEC filings.' : 'Add a FinancialData.net key to .env.local, then restart the server.');
+      setText('sidebar-data-status', status.configured ? 'Market data connected' : 'SEC data only');
+      setText('sidebar-data-help', status.configured ? `Load ticker reads SEC filings for free. Prices are added on request; ${status.priceRequestsLeft} price requests left today.` : 'SEC filings work without a key. Add a FinancialData.net key to .env.local for prices.');
     } catch {
-      setText('sidebar-data-status', 'Demo data active');
-      setText('sidebar-data-help', 'Start the local server to load real market data.');
+      setText('sidebar-data-status', 'Server unavailable');
+      setText('sidebar-data-help', 'Start the local server to load market data.');
     }
   }
 
-  async function loadRealTicker() {
-    const ticker = $('ticker-search').value.trim().toUpperCase();
-    if (!/^[A-Z0-9.\-]{1,12}$/.test(ticker)) { apiMessage('Enter a valid ticker symbol, such as MSFT.', 'error'); return; }
-    if (ticker === 'APPL') { apiMessage('Apple trades as AAPL. Enter AAPL to load its data.', 'error'); return; }
-    $('load-ticker').disabled = true;
-    apiMessage(`Loading ${ticker} prices and SEC filings…`);
+  function depthMessage(message, kind = '') {
+    for (const id of ['api-message', 'depth-message']) { $(id).textContent = message; $(id).className = `api-message ${kind}`; }
+  }
+
+  // Loads a ticker at the requested depth. SEC-only loads cost no price requests.
+  async function loadTicker(input, depth = 'sec') {
+    const ticker = String(input || '').trim().toUpperCase();
+    if (!/^[A-Z0-9.\-]{1,12}$/.test(ticker)) { depthMessage('Enter a valid ticker symbol, such as MSFT.', 'error'); return; }
+    if (ticker === 'APPL') { depthMessage('Apple trades as AAPL. Enter AAPL to load its data.', 'error'); return; }
+    const existing = companies[ticker];
+    if (existing && depthOf(existing) >= DEPTH[depth]) { selectTicker(ticker); return; }
+    document.querySelectorAll('#load-ticker, .depth-button').forEach((button) => { button.disabled = true; });
+    depthMessage(depth === 'sec' ? `Reading ${ticker}'s SEC filings…` : depth === 'price' ? `Adding ${ticker}'s current price…` : `Loading ${ticker}'s price history…`);
     try {
-      const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}`);
+      const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=${depth}`);
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw Error(result.error || 'Could not load company data.');
-      if (!Array.isArray(result.rows) || result.rows.length < 2) throw Error('The provider returned too little data to chart.');
+      if (!Array.isArray(result.rows) || !Array.isArray(result.annual)) throw Error('The server returned incomplete data.');
       companies[ticker] = result;
       apiCache[ticker] = result;
       saveStore('lattice.api.v1', apiCache);
       selectTicker(ticker);
       const splits = result.splits?.length ? ` Adjusted for ${result.splits.length} stock split${result.splits.length > 1 ? 's' : ''}.` : '';
-      apiMessage(result.stale
-        ? `Showing ${result.name} data from ${String(result.fetchedAt).slice(0, 10)}; today's live-data allowance has been reached.`
-        : `${result.name} loaded: ${result.rows[0].date.slice(0, 4)}–${result.rows.at(-1).date.slice(0, 7)}.${splits}`, result.stale ? '' : 'success');
+      const loaded = depthOf(result) === DEPTH.sec ? `${result.name}: SEC filings loaded with no price requests. Add the current price for valuation, or the price chart for history.`
+        : depthOf(result) === DEPTH.price ? `${result.name}: current price added (${result.rows.at(-1).date}).`
+        : `${result.name}: price history loaded, ${result.rows[0].date.slice(0, 4)}–${result.rows.at(-1).date.slice(0, 7)}.${splits}`;
+      depthMessage(result.stale ? `Showing ${result.name} data from ${String(result.fetchedAt).slice(0, 10)}; today's price-data allowance has been reached.` : loaded, result.stale ? '' : 'success');
+      if (depth === 'sec' && view === 'research') showView('fundamentals');
       renderPortfolio();
-    } catch (error) { apiMessage(error.message || 'Could not load market data.', 'error'); }
-    finally { $('load-ticker').disabled = false; }
+      checkApiStatus();
+    } catch (error) { depthMessage(error.message || 'Could not load market data.', 'error'); }
+    finally { document.querySelectorAll('#load-ticker, .depth-button').forEach((button) => { button.disabled = false; }); }
+  }
+
+  // Offers the next data levels for the selected real ticker.
+  function renderDepthActions(company) {
+    const level = depthOf(company);
+    const buttons = company?.source !== 'api' ? '' : [
+      level < DEPTH.price ? '<button class="outline-button depth-button" data-depth="price" type="button">Add current price<small>1 request</small></button>' : '',
+      level < DEPTH.full ? '<button class="outline-button depth-button" data-depth="full" type="button">Load price chart<small>up to 10 requests</small></button>' : ''
+    ].join('');
+    document.querySelectorAll('.depth-actions').forEach((element) => { element.innerHTML = buttons; });
   }
 
   function areaMultiple(result) {
@@ -144,6 +139,20 @@
 
   function renderResearch() {
     const company = companies[selectedTicker];
+    $('welcome-empty').hidden = Boolean(company);
+    $('research-company').hidden = !company;
+    if (!company) { $('research-content').hidden = true; $('chart-empty').hidden = true; currentResult = null; return; }
+    renderDepthActions(company);
+    setText('company-avatar', company.name.charAt(0).toUpperCase());
+    setText('company-name', company.name);
+    setText('company-ticker', company.ticker);
+    const sourceLabel = company.source === 'api' ? `${company.provider || 'Market data'} · updated ${String(company.fetchedAt || '').slice(0, 10)}` : 'Imported data';
+    setText('company-meta', `${company.sector || 'Unclassified'} · ${sourceLabel}`);
+    setText('source-badge', company.source === 'api' ? (depthOf(company) === DEPTH.full ? 'REAL MARKET DATA' : 'SEC EDGAR DATA') : 'IMPORTED DATA');
+    const needsChart = depthOf(company) < DEPTH.full;
+    $('chart-empty').hidden = !needsChart;
+    $('research-content').hidden = needsChart;
+    if (needsChart) { currentResult = null; return; }
     const growthRate = Number($('growth-input').value) / 100;
     const typedExit = Number($('exit-pe-input').value);
     const exitPe = manualExitPe && typedExit > 0 ? typedExit : null;
@@ -158,12 +167,6 @@
     setText('chart-subtitle', priceOnly ? `Monthly closing observations · ${range}` : `Does the price follow the earnings? · ${range}`);
     $('growth-input').disabled = priceOnly;
     $('exit-pe-input').disabled = priceOnly;
-    setText('company-avatar', company.name.charAt(0).toUpperCase());
-    setText('company-name', company.name);
-    setText('company-ticker', company.ticker);
-    const sourceLabel = company.source === 'demo' ? 'Synthetic company' : company.source === 'api' ? `${company.provider || 'Market data'} · updated ${String(company.fetchedAt || '').slice(0, 10)}` : 'Imported data';
-    setText('company-meta', `${company.sector || 'Unclassified'} · ${sourceLabel}`);
-    setText('source-badge', company.source === 'demo' ? 'SYNTHETIC DEMO DATA' : company.source === 'api' ? 'REAL MARKET DATA' : 'IMPORTED DATA');
     setText('chart-footnote', company.methodologyNote || 'Normal P/E is the median observed P/E within the selected period. Prices and EPS must use the same share basis.');
     setText('metric-price', money(result?.latest.price));
     setText('metric-price-date', result ? `Month-end close, ${result.latest.date}` : 'No valid data');
@@ -332,13 +335,26 @@
 
   function renderFundamentals() {
     const company = companies[selectedTicker];
+    $('fund-company').hidden = !company;
+    if (!company) {
+      setText('fund-empty-title', 'Enter a U.S. ticker to begin');
+      setText('fund-empty-text', 'Use the search box on the Research page. SEC filings load with no price requests.');
+      $('fund-empty').hidden = false; $('fund-content').hidden = true; return;
+    }
+    renderDepthActions(company);
     setText('fund-avatar', company.name.charAt(0).toUpperCase());
     setText('fund-name', company.name);
     setText('fund-ticker', company.ticker);
     const F = hasStatements(company) ? fundamentalsFor(company, true) : null;
     $('fund-empty').hidden = Boolean(F);
     $('fund-content').hidden = !F;
-    if (!F) { setText('fund-meta', `${company.sector || 'Unclassified'} · no statement data`); return; }
+    if (!F) {
+      setText('fund-empty-title', 'Fundamentals need SEC filings');
+      setText('fund-empty-text', 'Imported companies only include price, EPS and dividends. Load a real ticker such as AAPL on the Research page.');
+      setText('fund-meta', `${company.sector || 'Unclassified'} · no statement data`); return;
+    }
+    const hasPrice = Number.isFinite(F.price);
+    const needsPrice = hasPrice ? '' : '<p class="valuation-note">Add the current price (1 request) to see market cap, multiples and FCF yield.</p>';
     ensureMarket();
     setText('fund-meta', `${company.sector || 'Unclassified'} · latest fiscal year ${F.latestYear.year} · trailing twelve months to ${F.ttmEnd}`);
     const g = F.growth, p = F.profitability, b = F.balance, v = F.valuation, c = F.capital;
@@ -367,14 +383,15 @@
       ['P/E · P/FCF', `${multiple(v.pe)} · ${multiple(v.pfcf)}`, 'trailing twelve months'],
       ['FCF yield', plainPercent(v.fcfYield), `TTM FCF ${compactMoney(v.ttmFcf)}`],
       ['EV/EBIT · EV/EBITDA', `${multiple(v.evEbit)} · ${multiple(v.evEbitda)}`, 'trailing twelve months']
-    ]);
+    ]) + needsPrice;
     const betaText = c.beta ? `${number(c.betaUsed, 2)}` : market ? '1.00' : '…';
+    const betaHint = c.beta ? `${c.beta.months} months vs S&P 500, raw ${number(c.beta.raw, 2)}` : depthOf(company) < DEPTH.full ? 'load the price chart to measure; using 1.0' : market ? 'not enough overlapping history; using 1.0' : 'loading';
     $('fund-capital').innerHTML = statRows([
       ['Risk-free rate', c.riskFree == null ? (market ? 'Unavailable' : '…') : plainPercent(c.riskFree, 2), market?.riskFree ? `10-yr Treasury, FRED, ${market.riskFree.date}` : '10-yr Treasury, FRED'],
-      ['Beta', betaText, c.beta ? `${c.beta.months} months vs S&P 500, raw ${number(c.beta.raw, 2)}` : market ? 'market history unavailable; using 1.0' : 'loading'],
+      ['Beta', betaText, betaHint],
       ['Cost of equity', plainPercent(c.costEquity), 'risk-free + beta × premium'],
       ['Cost of debt (pre-tax)', plainPercent(c.costDebt), c.costDebtEstimated ? 'interest not reported; risk-free + 1.5%' : 'interest expense ÷ average debt'],
-      ['WACC', plainPercent(c.wacc), c.equityWeight == null ? '' : `${plainPercent(c.equityWeight, 0)} equity · tax ${plainPercent(c.taxRate, 0)}`],
+      ['WACC', plainPercent(c.wacc), c.equityWeight == null ? (hasPrice ? '' : 'needs the current price for weights') : `${plainPercent(c.equityWeight, 0)} equity · tax ${plainPercent(c.taxRate, 0)}`],
       ['ROIC − WACC', `<span class="${c.roicSpread == null ? '' : c.roicSpread >= 0 ? 'positive' : 'negative'}">${percent(c.roicSpread)}</span>`, c.roicSpread == null ? '' : c.roicSpread >= 0 ? 'creating value' : 'earning less than its cost of capital']
     ]);
     $('dcf-growth').placeholder = number(F.dcf.defaultGrowth * 100, 1);
@@ -384,7 +401,7 @@
     setText('dcf-safety', F.dcf.marginOfSafety == null ? '—' : `${plainPercent(Math.abs(F.dcf.marginOfSafety))} ${F.dcf.marginOfSafety >= 0 ? 'below' : 'above'}`);
     $('dcf-safety').className = F.dcf.marginOfSafety == null ? '' : F.dcf.marginOfSafety >= 0 ? 'positive' : 'negative';
     setText('dcf-detail', dcf
-      ? `Starting FCF/share ${money(F.dcf.fcfPerShare)} (TTM). Growth ${plainPercent(F.dcf.growth)} → terminal ${plainPercent(F.dcf.terminalGrowth)}, discounted at ${plainPercent(F.dcf.discount, 2)}. Terminal value is ${plainPercent(dcf.terminalShare, 0)} of the total. The price is ${money(F.price)}.`
+      ? `Starting FCF/share ${money(F.dcf.fcfPerShare)} (TTM). Growth ${plainPercent(F.dcf.growth)} → terminal ${plainPercent(F.dcf.terminalGrowth)}, discounted at ${plainPercent(F.dcf.discount, 2)}. Terminal value is ${plainPercent(dcf.terminalShare, 0)} of the total.${hasPrice ? ` The price is ${money(F.price)}.` : ' Add the current price to compare.'}`
       : F.dcf.fcfPerShare > 0 ? 'The discount rate must exceed terminal growth by at least 0.5%.' : 'Free cash flow is negative or missing, so a cash-flow valuation is not meaningful.');
     renderFundamentalTable(F);
     renderPeers(F);
@@ -417,7 +434,8 @@
   const peerLists = readStore('lattice.peers.v1', {});
   const peerData = readStore('lattice.peerdata.v1', {});
   for (const [ticker, company] of Object.entries(peerData)) if (!company?.fetchedAt || Date.now() - Date.parse(company.fetchedAt) > API_CACHE_MS || !('ttm' in company)) delete peerData[ticker];
-  const peerCompany = (ticker) => companies[ticker]?.source === 'api' ? companies[ticker] : peerData[ticker];
+  // Peers need a price for valuation, so an SEC-only copy in `companies` doesn't count.
+  const peerCompany = (ticker) => companies[ticker]?.source === 'api' && depthOf(companies[ticker]) >= DEPTH.price ? companies[ticker] : peerData[ticker];
   function peerMessage(message, kind = '') { $('peer-message').textContent = message; $('peer-message').className = `api-message peer-message ${kind}`; }
 
   function renderPeers(F) {
@@ -435,6 +453,7 @@
   }
 
   async function addPeers() {
+    if (!selectedTicker) return;
     const tickers = [...new Set($('peer-input').value.toUpperCase().split(/[\s,]+/).filter((item) => /^[A-Z0-9.\-]{1,12}$/.test(item) && item !== selectedTicker))];
     if (!tickers.length) { peerMessage('Enter one or more tickers, separated by commas.', 'error'); return; }
     const list = peerLists[selectedTicker] || [];
@@ -446,7 +465,7 @@
     for (const ticker of tickers) {
       if (peerCompany(ticker)) continue;
       try {
-        const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=peer`);
+        const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=price`);
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw Error(result.error || 'Could not load.');
         peerData[ticker] = result;
@@ -462,8 +481,9 @@
   }
 
   function renderPortfolio() {
-    const active = holdings.filter((item) => companies[item.ticker] && item.shares > 0);
-    const missing = holdings.filter((item) => !companies[item.ticker] && item.shares > 0);
+    const priced = (ticker) => companies[ticker]?.rows?.length > 0;
+    const active = holdings.filter((item) => priced(item.ticker) && item.shares > 0);
+    const missing = holdings.filter((item) => !priced(item.ticker) && item.shares > 0);
     const totalValue = active.reduce((sum, item) => sum + item.shares * companies[item.ticker].rows.at(-1).price, 0);
     const totalCost = holdings.reduce((sum, item) => sum + item.shares * item.cost, 0);
     setText('portfolio-value', missing.length ? '—' : money(totalValue));
@@ -471,7 +491,7 @@
     setText('portfolio-gain', missing.length ? '—' : money(totalValue - totalCost));
     $('portfolio-gain').className = `metric-value ${totalValue - totalCost >= 0 ? 'positive' : 'negative'}`;
     setText('holding-count', holdings.length);
-    const missingNotice = missing.length ? `<div class="api-message">Reload market data for ${missing.map((item) => escapeHtml(item.ticker)).join(', ')} to calculate the full portfolio value.</div>` : '';
+    const missingNotice = missing.length ? `<div class="api-message">Add the current price for ${missing.map((item) => escapeHtml(item.ticker)).join(', ')} (load the ticker, then Add current price) to calculate the full portfolio value.</div>` : '';
     $('holdings-content').innerHTML = missingNotice + (active.length ? `<table class="holdings-table"><thead><tr><th>COMPANY</th><th>SHARES</th><th>AVG COST</th><th>LATEST PRICE</th><th>MARKET VALUE</th><th>GAIN / LOSS</th><th></th></tr></thead><tbody>${active.map((item) => { const company = companies[item.ticker]; const price = company.rows.at(-1).price; const gain = item.shares * (price - item.cost); return `<tr><td>${escapeHtml(company.name)} <span class="ticker-tag">${escapeHtml(item.ticker)}</span></td><td>${number(item.shares, 3)}</td><td>${money(item.cost)}</td><td>${money(price)}</td><td>${money(item.shares * price)}</td><td class="${gain >= 0 ? 'positive' : 'negative'}">${money(gain)}</td><td><button data-remove="${escapeHtml(item.ticker)}" aria-label="Remove ${escapeHtml(item.ticker)} holding">Remove</button></td></tr>`; }).join('')}</tbody></table>` : missing.length ? '' : '<div class="empty-state"><span class="empty-icon">▥</span><strong>No holdings yet</strong>Add a position to see your portfolio value here.</div>');
   }
 
@@ -488,12 +508,16 @@
   }
 
   function openImport() { $('import-error').textContent = ''; $('import-dialog').showModal(); }
-  function openHolding() { $('holding-error').textContent = ''; $('holding-ticker').innerHTML = Object.values(companies).map((company) => `<option value="${escapeHtml(company.ticker)}">${escapeHtml(company.name)} (${escapeHtml(company.ticker)})</option>`).join(''); $('holding-ticker').value = selectedTicker; $('holding-dialog').showModal(); }
+  function openHolding() {
+    if (!Object.keys(companies).length) { showView('research'); depthMessage('Load a ticker first, then add it as a holding.', 'error'); return; }
+    $('holding-error').textContent = ''; $('holding-ticker').innerHTML = Object.values(companies).map((company) => `<option value="${escapeHtml(company.ticker)}">${escapeHtml(company.name)} (${escapeHtml(company.ticker)})</option>`).join(''); $('holding-ticker').value = selectedTicker; $('holding-dialog').showModal();
+  }
 
   $('ticker-chips').addEventListener('click', (event) => { const button = event.target.closest('[data-ticker]'); if (button) selectTicker(button.dataset.ticker); });
   $('ticker-search').addEventListener('input', (event) => renderChips(event.target.value));
-  $('ticker-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); const ticker = $('ticker-search').value.trim().toUpperCase(); if (companies[ticker]) selectTicker(ticker); else loadRealTicker(); } });
-  $('load-ticker').addEventListener('click', loadRealTicker);
+  $('ticker-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); const ticker = $('ticker-search').value.trim().toUpperCase(); if (companies[ticker]) selectTicker(ticker); else loadTicker(ticker); } });
+  $('load-ticker').addEventListener('click', () => loadTicker($('ticker-search').value));
+  document.addEventListener('click', (event) => { const button = event.target.closest('.depth-button'); if (button && selectedTicker) loadTicker(selectedTicker, button.dataset.depth); });
   document.addEventListener('keydown', (event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); showView('research'); $('ticker-search').focus(); } });
   document.querySelectorAll('.nav-link').forEach((link) => link.addEventListener('click', (event) => { event.preventDefault(); showView(link.dataset.view); }));
   window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
@@ -520,7 +544,9 @@
 
   setText('today-label', new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(new Date()));
   renderChips(); renderResearch(); renderPortfolio(); showView(location.hash.slice(1) || 'research'); checkApiStatus();
-  // Shareable links: /app?ticker=AAPL opens that company, fetching it if needed.
-  const linked = (new URLSearchParams(location.search).get('ticker') || '').trim().toUpperCase();
-  if (linked) { if (companies[linked]) selectTicker(linked); else { $('ticker-search').value = linked; loadRealTicker(); } }
+  // Shareable links: /app?ticker=AAPL opens that company from SEC data; add &depth=price or &depth=full for prices.
+  const params = new URLSearchParams(location.search);
+  const linked = (params.get('ticker') || '').trim().toUpperCase();
+  const linkedDepth = params.get('depth') in DEPTH ? params.get('depth') : 'sec';
+  if (linked) loadTicker(linked, linkedDepth);
 })();

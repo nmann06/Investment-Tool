@@ -101,6 +101,23 @@ test('companies without dividend filings show zero dividends', () => {
   assert.equal(company.hasFundamentals, true);
 });
 
+test('SEC-only loads make no price requests and need no key', async () => {
+  const calls = [];
+  const respond = (body) => ({ ok: true, status: 200, json: async () => body });
+  const fetchImpl = async (url) => {
+    const href = String(url);
+    calls.push(href);
+    if (href.includes('company_tickers')) return respond({ 0: { cik_str: 123, ticker: 'TEST', title: 'Test Co' } });
+    if (href.includes('companyfacts')) return respond({ facts: { 'us-gaap': gaap(splitHistory) } });
+    return respond({ name: 'Test Company Inc.' });
+  };
+  const company = await fetchCompany('TEST', '', { fetchImpl, maxPages: 0 });
+  assert.equal(company.depth, 'sec');
+  assert.deepEqual(company.rows, []);
+  assert.ok(company.annual.length > 0);
+  assert.ok(!calls.some((href) => href.includes('financialdata')));
+});
+
 test('fetchCompany joins SEC and price responses without exposing the key', async () => {
   const calls = [];
   const respond = (body) => ({ ok: true, status: 200, json: async () => body });
