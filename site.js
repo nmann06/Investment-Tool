@@ -10,6 +10,6 @@
     if (active) link.setAttribute('aria-current', 'page');
   });
   document.getElementById('footer-year').textContent = new Date().getFullYear();
-  const titles = { home: 'Nathaniel Mann — Investment research & projects', about: 'About Me — Nathaniel Mann', portfolio: 'Portfolio — Nathaniel Mann' };
+  const titles = { home: 'Nathaniel Mann — Electrical engineering student', about: 'About Me — Nathaniel Mann', portfolio: 'Projects — Nathaniel Mann' };
   document.title = titles[page];
 })();

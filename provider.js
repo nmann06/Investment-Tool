@@ -226,20 +226,33 @@ async function fetchJson(url, options, label) {
   catch { throw new ProviderError(`${label} returned invalid JSON.`); }
 }
 
-async function fetchPrices(symbol, key, fetchImpl) {
+// Pages newest-first. With previously fetched history, stops at the first page that overlaps it,
+// so a refresh usually costs one request instead of the full ~10.
+async function fetchPrices(symbol, key, fetchImpl, known = [], onRequest = () => {}) {
+  const knownByDate = new Map(known.filter((row) => validDate(row.date)).map((row) => [row.date, row]));
+  const newestKnown = [...knownByDate.keys()].sort().at(-1);
   const records = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     const url = new URL(PRICE_BASE);
     url.searchParams.set('identifier', symbol);
     url.searchParams.set('offset', String(page * PAGE_SIZE));
     url.searchParams.set('key', key);
+    onRequest();
     const batch = await fetchJson(url, { fetchImpl }, 'FinancialData.net');
     if (batch != null && !Array.isArray(batch)) throw new ProviderError('FinancialData.net returned an unexpected price response.');
     if (!batch || !batch.length) break;
     records.push(...batch);
     if (batch.length < PAGE_SIZE) break;
+    if (newestKnown && batch.some((row) => validDate(row.date) && row.date <= newestKnown)) {
+      // A split since the last fetch restates all history; the stored copy is then on the old share basis.
+      const restated = batch.some((row) => { const old = knownByDate.get(row.date); return old && Math.abs(finiteNumber(row.close) / finiteNumber(old.close) - 1) > 0.01; });
+      if (restated) return fetchPrices(symbol, key, fetchImpl, [], onRequest);
+      break;
+    }
   }
-  return records;
+  const merged = new Map(knownByDate);
+  for (const row of records) if (validDate(row.date)) merged.set(row.date, row);
+  return [...merged.values()].sort((a, b) => b.date.localeCompare(a.date));
 }
 
 let tickerCache = null;
@@ -252,7 +265,7 @@ async function lookupCik(symbol, options) {
   return tickerCache.map.get(symbol.replace(/\./g, '-')) || null;
 }
 
-async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent } = {}) {
+async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPrices = [], onRequest, onPrices } = {}) {
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) throw new ProviderError('Invalid ticker.', 400);
   if (!key) throw new ProviderError('Set FINANCIALDATA_API_KEY on the server.', 503);
   const sec = { fetchImpl, headers: { 'User-Agent': userAgent || 'Lattice investment research (nathanielmann.ca)', Accept: 'application/json' } };
@@ -262,8 +275,9 @@ async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent } = {}) 
   const [facts, submissions, prices] = await Promise.all([
     fetchJson(`${SEC_FACTS}CIK${cik}.json`, sec, 'SEC EDGAR'),
     fetchJson(`${SEC_SUBMISSIONS}CIK${cik}.json`, sec, 'SEC EDGAR').catch(() => null),
-    fetchPrices(symbol, key, fetchImpl)
+    fetchPrices(symbol, key, fetchImpl, knownPrices, onRequest)
   ]);
+  if (onPrices && prices.length) onPrices(prices);
   if (!facts?.facts?.['us-gaap']) throw new ProviderError(`SEC filings for ${symbol} do not include U.S. GAAP financial data.`, 422);
   if (!prices.length) throw new ProviderError(`No price history was found for ${symbol}. Check the ticker.`, 404);
   const filedName = submissions?.name || entry.title || symbol;
@@ -276,4 +290,4 @@ async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent } = {}) 
   });
 }
 
-module.exports = { ProviderError, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, valueAt, buildFundamentals, combine, fetchCompany };
+module.exports = { ProviderError, MAX_PAGES, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, valueAt, buildFundamentals, combine, fetchPrices, fetchCompany };

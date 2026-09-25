@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d1726">
+  <meta name="robots" content="noindex">
+  <title>Sign in — Investment Tool</title>
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="identity" href="/" aria-label="Nathaniel Mann, home"><span class="identity-mark">NM<span>.</span></span><span class="identity-name">NATHANIEL MANN</span></a>
+      <nav class="site-nav" aria-label="Site navigation"><a href="/">Home</a><a href="/#projects">Projects</a><a href="/#about">About</a></nav>
+    </header>
+    <main class="login-page">
+      <form class="login-card" method="post" action="/login">
+        <div class="section-label dark"><span class="label-line"></span> INVESTMENT TOOL</div>
+        <h1>Enter password</h1>
+        <p>Lattice uses a limited live-data allowance, so access is password protected.</p>
+        <input type="hidden" name="next" value="{{NEXT}}">
+        <label>Password<input type="password" name="password" autocomplete="current-password" required autofocus></label>
+        <button type="submit">Open the tool</button>
+        <div class="login-error" role="alert">{{ERROR}}</div>
+      </form>
+    </main>
+    <footer class="site-footer"><span>© Nathaniel Mann</span><a href="/">← Back to home</a></footer>
+  </div>
+</body>
+</html>

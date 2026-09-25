@@ -39,7 +39,13 @@ Setup:
 2. Copy `.env.local.example` to `.env.local` and set `FINANCIALDATA_API_KEY`. Optionally set `SEC_USER_AGENT` to a name and contact email. The SEC asks automated clients to identify themselves this way.
 3. Restart the server, enter a ticker such as `MSFT`, and press **Load real ticker**.
 
-Keys stay on the server and are never sent to the browser. Company results are cached in server memory for 24 hours. To protect the free price quota, the public server allows 20 new ticker lookups per day and 6 per visitor per hour.
+Keys stay on the server and are never sent to the browser. Company results are cached in server memory for 24 hours.
+
+The server budgets 280 FinancialData.net requests a day, leaving headroom under the free plan's 300. It also allows 6 lookups per visitor per hour. A new ticker costs about 10 requests. After that, the server keeps its daily price history in memory, so a refresh fetches only the newest page (1 request). If a split has restated the history, it refetches everything. When the budget runs out, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down, so the first load after that is a full fetch again.
+
+## Password
+
+The homepage is public. The investment tool (`/app`) and its API require the password in `APP_PASSWORD`. Visitors sign in once, and a signed session cookie keeps them in for 30 days. Changing the password signs everyone out. Failed attempts are limited to 10 per IP per 15 minutes. Locally the tool stays open if `APP_PASSWORD` is unset. On Render it is always locked, and it stays locked until the password is set.
 
 ### How the earnings line is built
 
@@ -55,7 +61,7 @@ Limitations: earnings are GAAP, so one-time items such as write-downs or investm
 The repo includes `render.yaml` for a Render **web service**.
 
 1. In Render, create a new **Blueprint** from the GitHub repository. It defines a free Node web service, runs the tests during build and checks `/health`.
-2. When prompted, set `FINANCIALDATA_API_KEY`, and set `SEC_USER_AGENT` to something like `Lattice research you@example.com`.
+2. When prompted, set `FINANCIALDATA_API_KEY` and a strong `APP_PASSWORD`. Set `SEC_USER_AGENT` to something like `Lattice research you@example.com`.
 3. The Blueprint adds `nathanielmann.ca` as a custom domain. Once the service is live, inspect the existing DNS records before changing them. Render's dashboard shows the exact records to add. Keep any unrelated email records intact.
 
 Render runs the server on its assigned `PORT` and host `0.0.0.0`. The free service may spin down after inactivity, which clears the in-memory cache.

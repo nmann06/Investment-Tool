@@ -1,6 +1,45 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSplits, buildFundamentals, valueAt, combine, fetchCompany } = require('../provider.js');
+const { detectSplits, buildFundamentals, valueAt, combine, fetchPrices, fetchCompany } = require('../provider.js');
+
+// Simulated provider: `days` daily closes, newest first, served 300 per page.
+function priceServer(days, price = () => 100) {
+  const all = Array.from({ length: days }, (_, index) => ({ date: new Date(Date.UTC(2026, 8, 1) - index * 86400000).toISOString().slice(0, 10), close: price(index) }));
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const offset = Number(new URL(url).searchParams.get('offset'));
+    calls.push(offset);
+    return { ok: true, status: 200, json: async () => all.slice(offset, offset + 300) };
+  };
+  return { all, calls, fetchImpl };
+}
+
+test('a first price fetch pages through the full history', async () => {
+  const server = priceServer(1000);
+  let counted = 0;
+  const records = await fetchPrices('TEST', 'key', server.fetchImpl, [], () => counted++);
+  assert.equal(records.length, 1000);
+  assert.deepEqual(server.calls, [0, 300, 600, 900]);
+  assert.equal(counted, 4);
+});
+
+test('a refresh with stored history costs one request and merges without duplicates', async () => {
+  const server = priceServer(1000);
+  const known = server.all.slice(5);
+  const records = await fetchPrices('TEST', 'key', server.fetchImpl, known);
+  assert.deepEqual(server.calls, [0]);
+  assert.equal(records.length, 1000);
+  assert.equal(new Set(records.map((row) => row.date)).size, 1000);
+  assert.equal(records[0].date, server.all[0].date);
+});
+
+test('a split since the last fetch discards the stored history', async () => {
+  const server = priceServer(1000, () => 50);
+  const known = server.all.slice(5).map((row) => ({ ...row, close: 100 }));
+  const records = await fetchPrices('TEST', 'key', server.fetchImpl, known);
+  assert.deepEqual(server.calls, [0, 0, 300, 600, 900]);
+  assert.ok(records.every((row) => row.close === 50));
+});
 
 const fact = (start, end, val, filed, form = '10-Q') => ({ start, end, val, filed, form });
 const gaap = (eps, dividends = []) => ({

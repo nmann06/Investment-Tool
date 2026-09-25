@@ -99,6 +99,7 @@
       const response = await fetch('/api/status');
       if (!response.ok) throw Error('Server unavailable');
       const status = await response.json();
+      $('sign-out').hidden = !status.signOut;
       setText('sidebar-data-status', status.configured ? 'Market data connected' : 'API key needed');
       setText('sidebar-data-help', status.configured ? 'Enter a U.S. ticker and press Load real ticker. Prices from FinancialData.net, earnings from SEC filings.' : 'Add a FinancialData.net key to .env.local, then restart the server.');
     } catch {
@@ -123,7 +124,9 @@
       saveStore('lattice.api.v1', apiCache);
       selectTicker(ticker);
       const splits = result.splits?.length ? ` Adjusted for ${result.splits.length} stock split${result.splits.length > 1 ? 's' : ''}.` : '';
-      apiMessage(`${result.name} loaded: ${result.rows[0].date.slice(0, 4)}–${result.rows.at(-1).date.slice(0, 7)}.${splits}`, 'success');
+      apiMessage(result.stale
+        ? `Showing ${result.name} data from ${String(result.fetchedAt).slice(0, 10)}; today's live-data allowance has been reached.`
+        : `${result.name} loaded: ${result.rows[0].date.slice(0, 4)}–${result.rows.at(-1).date.slice(0, 7)}.${splits}`, result.stale ? '' : 'success');
       renderPortfolio();
     } catch (error) { apiMessage(error.message || 'Could not load market data.', 'error'); }
     finally { $('load-ticker').disabled = false; }
