@@ -4,6 +4,8 @@ const CBOE_QUOTE = 'https://cdn.cboe.com/api/global/delayed_quotes/quotes/';
 const SEC_TICKERS = 'https://www.sec.gov/files/company_tickers.json';
 const SEC_FACTS = 'https://data.sec.gov/api/xbrl/companyfacts/';
 const SEC_SUBMISSIONS = 'https://data.sec.gov/submissions/';
+const SEC_ARCHIVES = 'https://www.sec.gov/Archives/edgar/data/';
+const ANNUAL_FORMS = new Set(['10-K', '10-K405', '10-KT']);
 // FRED's graph CSV download needs no API key. DGS10 is the 10-year Treasury constant-maturity yield.
 const FRED_CSV = 'https://fred.stlouisfed.org/graph/fredgraph.csv?id=';
 const DAY = 86400000;
@@ -427,10 +429,92 @@ async function fetchCompanyData(symbol, { fetchImpl = fetch, userAgent, withPric
   };
 }
 
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”', mdash: '—', ndash: '–', reg: '®', trade: '™', copy: '©', bull: '•', hellip: '…' };
+
+// Filing HTML to plain text, one paragraph per line. Filers split words across styled spans
+// ("B<span>USINESS</span>"), so inline tags are removed without adding a space; table cells get one.
+function htmlText(html) {
+  return html
+    .replace(/<(script|style|head)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<ix:header\b[\s\S]*?<\/ix:header>/gi, ' ')
+    .replace(/<\/(p|div|tr|li|h[1-6]|table)>|<br\s*\/?>/gi, '\n')
+    .replace(/<\/?t[dh]\b[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#(x?)([0-9a-f]+);/gi, (match, hex, code) => { const point = parseInt(code, hex ? 16 : 10); return point > 0 && point < 0x110000 ? String.fromCodePoint(point) : match; })
+    .replace(/&([a-z]+);/gi, (match, name) => ENTITIES[name.toLowerCase()] ?? match)
+    .replace(/[ \t ​]+/g, ' ')
+    .split('\n').map((line) => line.trim()).filter(Boolean).join('\n');
+}
+
+// Paragraphs of 10-K "Item 1. Business", up to "Item 1A" (or "Item 2" for filers without risk factors).
+// The table of contents repeats the heading, so the longest candidate is the real section.
+function businessSection(text) {
+  const joined = text.replace(/^(item\s*\d+[a-z]?\s*[.:]?)\n/gim, '$1 ');
+  let best = '';
+  for (const match of joined.matchAll(/^item\s*1\s*[.:\-–—]?\s*business\b.*$/gim)) {
+    const rest = joined.slice(match.index + match[0].length);
+    const end = rest.search(/^item\s*(1a|2)\b/im);
+    const body = end === -1 ? rest.slice(0, 60000) : rest.slice(0, end);
+    if (body.length > best.length) best = body;
+  }
+  return best.split('\n').filter((line) => line && !/^\d+$/.test(line) && !/form 10-k\s*\|/i.test(line) && !/^table of contents$/i.test(line));
+}
+
+// The opening prose paragraphs, skipping headings and "In this report, the terms…" definitions.
+function businessSummary(paragraphs, limit = 1100) {
+  const summary = [];
+  let length = 0;
+  for (const paragraph of paragraphs) {
+    if (paragraph.length < 60 || !/[.:]$/.test(paragraph) || /^(in this report|as used in this|unless the context|references (in this|to))/i.test(paragraph)) continue;
+    summary.push(paragraph);
+    length += paragraph.length;
+    if (length >= limit) break;
+  }
+  return summary;
+}
+
+async function fetchText(url, options, label) {
+  let response;
+  try { response = await options.fetchImpl(url, { headers: options.headers, signal: AbortSignal.timeout(30000) }); }
+  catch { throw new ProviderError(`Could not reach ${label}. Try again shortly.`); }
+  if (!response.ok) throw new ProviderError(`${label} returned HTTP ${response.status}.`);
+  return response.text();
+}
+
+function latestAnnual(filings) {
+  const index = (filings?.form || []).findIndex((form) => ANNUAL_FORMS.has(form));
+  return index === -1 ? null : { form: filings.form[index], accession: filings.accessionNumber[index], document: filings.primaryDocument[index], filed: filings.filingDate[index], period: filings.reportDate[index] || null };
+}
+
+// What the company does, from "Item 1. Business" of its latest 10-K.
+async function fetchProfile(symbol, { fetchImpl = fetch, userAgent } = {}) {
+  if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) throw new ProviderError('Invalid ticker.', 400);
+  const sec = { fetchImpl, headers: { 'User-Agent': userAgent || 'Lettuce investment research (nathanielmann.ca)', Accept: 'application/json' } };
+  const entry = await lookupCik(symbol, sec);
+  if (!entry) throw new ProviderError(`${symbol} was not found in SEC filings.`, 404);
+  const cik = String(entry.cik_str).padStart(10, '0');
+  const submissions = await fetchJson(`${SEC_SUBMISSIONS}CIK${cik}.json`, sec, 'SEC EDGAR');
+  let annual = latestAnnual(submissions?.filings?.recent);
+  // Busy filers push their last 10-K out of the "recent" block into an older page.
+  if (!annual && submissions?.filings?.files?.[0]?.name) annual = latestAnnual(await fetchJson(`${SEC_SUBMISSIONS}${submissions.filings.files[0].name}`, sec, 'SEC EDGAR'));
+  if (!annual) throw new ProviderError(`No 10-K annual report was found for ${symbol}.`, 404);
+  const url = `${SEC_ARCHIVES}${Number(entry.cik_str)}/${annual.accession.replace(/-/g, '')}/${annual.document}`;
+  const business = businessSection(htmlText(await fetchText(url, { ...sec, headers: { ...sec.headers, Accept: 'text/html' } }, 'SEC EDGAR')));
+  let length = 0;
+  return {
+    ticker: symbol,
+    summary: businessSummary(business),
+    // Enough of the section for a full read without sending megabytes to the browser.
+    business: business.filter((paragraph) => (length += paragraph.length) <= 20000),
+    filing: { ...annual, url },
+    fetchedAt: new Date().toISOString()
+  };
+}
+
 async function fetchCompany(symbol, options = {}) {
   const data = await fetchCompanyData(symbol, options);
   const quote = data.depth === 'full' ? await fetchQuote(symbol, options.fetchImpl).catch(() => null) : null;
   return combine({ ...data, quote });
 }
 
-module.exports = { ProviderError, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, latestTtm, valueAt, buildFundamentals, withQuote, combine, fetchPrices, fetchQuote, fetchFredSeries, fetchFredLatest, fetchCompanyData, fetchCompany };
+module.exports = { ProviderError, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, latestTtm, valueAt, buildFundamentals, withQuote, combine, fetchPrices, fetchQuote, fetchFredSeries, fetchFredLatest, fetchCompanyData, fetchCompany, htmlText, businessSection, businessSummary, fetchProfile };

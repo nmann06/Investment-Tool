@@ -91,6 +91,32 @@
     }).filter((item) => item.high != null);
   }
 
+  // Fiscal-year net income, EPS, dividends and year-end share price for the ten-year record.
+  // The year-end price is the month-end close nearest the fiscal year end, within 20 days either way:
+  // many fiscal years end on a Saturday a few days before the month's last trading day.
+  function yearRecord(company) {
+    const rows = (company.rows || []).filter((row) => finite(row.price));
+    const years = (company.annual || []).filter((item) => item && item.end).slice().sort((a, b) => a.end.localeCompare(b.end));
+    const gap = (row, end) => Math.abs(yearsBetween(row.date, end)) * 365.2425;
+    let previous = null;
+    return years.map((year) => {
+      const close = rows.filter((row) => gap(row, year.end) <= 20).sort((a, b) => gap(a, year.end) - gap(b, year.end))[0];
+      const price = close ? close.price : null;
+      const consecutive = previous && yearsBetween(previous.end, year.end) < 1.1;
+      const priceChange = consecutive && finite(previous.price) && finite(price) && previous.price > 0 ? price / previous.price - 1 : null;
+      previous = { end: year.end, price };
+      return { year: year.year, end: year.end, netIncome: finite(year.netIncome) ? year.netIncome : null, eps: finite(year.eps) ? year.eps : null, dividend: finite(year.dividend) ? year.dividend : null, price, priceChange };
+    });
+  }
+
+  // Compound annual growth between the first and last positive values of one field.
+  function recordGrowth(record, key) {
+    const points = record.filter((year) => finite(year[key]) && year[key] > 0);
+    if (points.length < 2) return null;
+    const first = points[0], last = points[points.length - 1];
+    return cagr(first[key], last[key], yearsBetween(first.end, last.end));
+  }
+
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
   const ratio = (top, bottom) => finite(top) && finite(bottom) && bottom !== 0 ? top / bottom : null;
   const positiveRatio = (top, bottom) => finite(top) && finite(bottom) && bottom > 0 ? top / bottom : null;
@@ -226,5 +252,5 @@
     };
   }
 
-  return { GRAHAM_PE, median, yearsBetween, cagr, calculate, annualSummary, yearMetrics, growthOver, beta, discountedCashFlow, fundamentals };
+  return { GRAHAM_PE, median, yearsBetween, cagr, calculate, annualSummary, yearRecord, recordGrowth, yearMetrics, growthOver, beta, discountedCashFlow, fundamentals };
 });

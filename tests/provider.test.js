@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSplits, buildFundamentals, valueAt, withQuote, combine, fetchPrices, fetchQuote, fetchCompany } = require('../provider.js');
+const { detectSplits, buildFundamentals, valueAt, withQuote, combine, fetchPrices, fetchQuote, fetchCompany, htmlText, businessSection, businessSummary } = require('../provider.js');
 
 const respond = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
 
@@ -134,4 +134,29 @@ test('a ticker Cboe does not carry still returns its SEC data with a notice', as
   assert.equal(company.depth, 'sec');
   assert.ok(company.annual.length > 0);
   assert.match(company.priceError, /Cboe has no price history for TEST/);
+});
+
+// Shaped like real filings: a table of contents, headings split across lines and words split across spans.
+const filing = `<html><head><title>10-K</title></head><body>
+<table><tr><td><span>Item 1.</span></td><td>Business</td><td>1</td></tr><tr><td>Item 1A.</td><td>Risk Factors</td><td>5</td></tr></table>
+<p><span>PART I</span></p><p><span>ITEM 1. B</span><span>USINESS</span></p><p>General</p>
+<p>In this report, the terms &#8220;Company&#8221; and &#8220;we&#8221; mean Test Co and its subsidiaries.</p>
+<p>Test Co designs and sells industrial widgets and related software to manufacturers in more than 40&#160;countries.</p>
+<p>Test Co | 2025 Form 10-K | 1</p>
+<p>Our services segment installs and maintains widgets under multi-year contracts &amp; subscriptions.</p>
+<p><span>Item 1A.</span></p><p>Risk Factors</p><p>Widgets may fall out of fashion, which would be bad for the business.</p></body></html>`;
+
+test('the business section is found past the table of contents, with split words rejoined', () => {
+  const section = businessSection(htmlText(filing));
+  assert.deepEqual(section, [
+    'General',
+    'In this report, the terms “Company” and “we” mean Test Co and its subsidiaries.',
+    'Test Co designs and sells industrial widgets and related software to manufacturers in more than 40 countries.',
+    'Our services segment installs and maintains widgets under multi-year contracts & subscriptions.'
+  ]);
+  assert.deepEqual(businessSummary(section), section.slice(2));
+});
+
+test('a filing without an Item 1 heading gives an empty section', () => {
+  assert.deepEqual(businessSection(htmlText('<p>Annual report</p><p>Item 7. Management discussion</p>')), []);
 });

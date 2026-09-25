@@ -132,6 +132,55 @@
     document.querySelectorAll('.depth-actions').forEach((element) => { element.innerHTML = buttons; });
   }
 
+  // What the company does, from "Item 1. Business" of its latest 10-K. Kept for 30 days, since it changes once a year.
+  const PROFILE_MS = 30 * 86400000;
+  const profiles = readStore('lattice.profiles.v1', {});
+  for (const [ticker, profile] of Object.entries(profiles)) if (!profile?.fetchedAt || !Array.isArray(profile.summary) || Date.now() - Date.parse(profile.fetchedAt) > PROFILE_MS) delete profiles[ticker];
+  const profileStatus = new Map();
+  let renderedProfile = '';
+
+  async function loadProfile(ticker) {
+    profileStatus.set(ticker, 'loading');
+    try {
+      const response = await fetch(`/api/profile?symbol=${encodeURIComponent(ticker)}`);
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw Error(result.error || 'Could not load the company description.');
+      profiles[ticker] = result;
+      // Each description can be ~20 KB, so only the 30 most recent are kept.
+      const tickers = Object.keys(profiles);
+      while (tickers.length > 30) delete profiles[tickers.shift()];
+      saveStore('lattice.profiles.v1', profiles);
+      profileStatus.delete(ticker);
+    } catch (error) { profileStatus.set(ticker, error.message || 'Could not load the company description.'); }
+    if (ticker === selectedTicker) renderProfile(companies[ticker]);
+  }
+
+  function renderProfile(company) {
+    $('company-profile').hidden = company?.source !== 'api';
+    if (company?.source !== 'api') { renderedProfile = ''; return; }
+    const profile = profiles[company.ticker];
+    const status = profileStatus.get(company.ticker);
+    // Skip identical re-renders so the minute price refresh doesn't reset the reader's scroll position.
+    const key = `${company.ticker}|${profile?.fetchedAt || status || 'none'}`;
+    if (key === renderedProfile) return;
+    renderedProfile = key;
+    if (!profile) {
+      $('profile-summary').innerHTML = `<p class="profile-status">${status && status !== 'loading' ? escapeHtml(status) : 'Reading the latest annual report…'}</p>`;
+      $('profile-more').hidden = true;
+      $('profile-more').open = false;
+      $('profile-source').textContent = '';
+      if (!status) loadProfile(company.ticker);
+      return;
+    }
+    $('profile-summary').innerHTML = profile.summary.length ? profile.summary.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join('') : '<p class="profile-status">The business section of this annual report could not be read automatically. The full report is linked below.</p>';
+    $('profile-more').hidden = profile.business.length <= profile.summary.length;
+    $('profile-more').open = false;
+    // Short lines without closing punctuation are the filing's own subheadings.
+    $('profile-business').innerHTML = profile.business.map((line) => line.length < 90 && !/[.:;,]$/.test(line) ? `<h4>${escapeHtml(line)}</h4>` : `<p>${escapeHtml(line)}</p>`).join('');
+    const filing = profile.filing;
+    $('profile-source').innerHTML = `From “Item 1. Business” in the ${escapeHtml(filing.form)}${filing.period ? ` for the year ending ${escapeHtml(filing.period)}` : ''}, filed ${escapeHtml(filing.filed)}. <a href="${escapeHtml(filing.url)}" target="_blank" rel="noopener">Read the full annual report ↗</a>`;
+  }
+
   function areaMultiple(result) {
     return multipleMode === 'normal' && result?.normalPe != null ? result.normalPe : M.GRAHAM_PE;
   }
@@ -140,6 +189,7 @@
     const company = companies[selectedTicker];
     $('welcome-empty').hidden = Boolean(company);
     $('research-company').hidden = !company;
+    renderProfile(company);
     if (!company) { $('research-content').hidden = true; $('chart-empty').hidden = true; currentResult = null; return; }
     renderDepthActions(company);
     setText('company-avatar', company.name.charAt(0).toUpperCase());
@@ -403,6 +453,7 @@
       ? `Starting FCF/share ${money(F.dcf.fcfPerShare)} (TTM). Growth ${plainPercent(F.dcf.growth)} → terminal ${plainPercent(F.dcf.terminalGrowth)}, discounted at ${plainPercent(F.dcf.discount, 2)}. Terminal value is ${plainPercent(dcf.terminalShare, 0)} of the total.${hasPrice ? ` The price is ${money(F.price)}.` : ' Add the current price to compare.'}`
       : F.dcf.fcfPerShare > 0 ? 'The discount rate must exceed terminal growth by at least 0.5%.' : 'Free cash flow is negative or missing, so a cash-flow valuation is not meaningful.');
     renderFundamentalTable(F);
+    renderRival();
     renderPeers(F);
   }
 
@@ -479,6 +530,83 @@
     peerMessage(failed.join(' '), failed.length ? 'error' : '');
   }
 
+  // Closest competitor for each ticker, compared on a ten-year record. Its data is cached with the peers.
+  const rivals = readStore('lattice.rivals.v1', {});
+  const rivalLoads = new Set();
+  function rivalMessage(message, kind = '') { $('rival-message').textContent = message; $('rival-message').className = `api-message peer-message ${kind}`; }
+  const rivalCompany = (ticker) => [companies[ticker], peerData[ticker]].find((company) => company?.source === 'api' && depthOf(company) >= DEPTH.full) || null;
+
+  async function loadRival(ticker, owner) {
+    rivalLoads.add(ticker);
+    rivalMessage(`Loading ${ticker}'s filings and prices…`);
+    try {
+      const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=full`);
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw Error(result.error || 'Could not load.');
+      if (depthOf(result) < DEPTH.full) throw Error(result.priceError || 'No price history is available.');
+      peerData[ticker] = result;
+      saveStore('lattice.peerdata.v1', peerData);
+      rivalMessage('');
+    } catch (error) {
+      rivalMessage(`${ticker}: ${error.message}`, 'error');
+      if (rivals[owner] === ticker) { delete rivals[owner]; saveStore('lattice.rivals.v1', rivals); }
+    } finally { rivalLoads.delete(ticker); }
+    if (view === 'fundamentals' && owner === selectedTicker) renderRival();
+  }
+
+  function setRival(input) {
+    const ticker = String(input || '').trim().toUpperCase();
+    if (!selectedTicker) return;
+    if (!/^[A-Z0-9.\-]{1,12}$/.test(ticker) || ticker === selectedTicker) { rivalMessage('Enter a different ticker, such as MSFT.', 'error'); return; }
+    rivals[selectedTicker] = ticker;
+    saveStore('lattice.rivals.v1', rivals);
+    $('rival-input').value = '';
+    rivalMessage('');
+    renderRival();
+  }
+
+  function renderRival() {
+    const company = companies[selectedTicker];
+    const rival = rivals[selectedTicker];
+    const picks = (peerLists[selectedTicker] || []).filter((ticker) => ticker !== rival);
+    $('rival-picks').innerHTML = picks.length ? `<span class="company-meta">From your peers:</span>${picks.map((ticker) => `<button class="ticker-chip" data-rival="${escapeHtml(ticker)}" type="button">${escapeHtml(ticker)}</button>`).join('')}` : '';
+    $('rival-summary').innerHTML = '';
+    if (!company || !rival) {
+      $('rival-table').innerHTML = '<tbody><tr><td>Enter the closest competitor to compare ten years of net income, dividends and share price side by side.</td></tr></tbody>';
+      return;
+    }
+    const other = rivalCompany(rival);
+    if (!other) {
+      $('rival-table').innerHTML = `<tbody><tr><td>Loading ${escapeHtml(rival)}…</td></tr></tbody>`;
+      if (!rivalLoads.has(rival)) loadRival(rival, selectedTicker);
+      return;
+    }
+    const mine = M.yearRecord(company).filter((year) => year.netIncome != null || year.eps != null).slice(-10);
+    const theirs = new Map(M.yearRecord(other).map((year) => [year.year, year]));
+    const matched = mine.map((year) => theirs.get(year.year)).filter(Boolean);
+    const tag = (item) => `<span class="ticker-tag">${escapeHtml(item.ticker)}</span>`;
+    const stat = (label, key) => `<div class="rival-stat">${label}<strong>${percent(M.recordGrowth(mine, key))} <span>${escapeHtml(company.ticker)}</span> · ${percent(M.recordGrowth(matched, key))} <span>${escapeHtml(other.ticker)}</span></strong></div>`;
+    $('rival-summary').innerHTML = [stat('Net income growth / year', 'netIncome'), stat('EPS growth / year', 'eps'), stat('Dividend growth / year', 'dividend'), stat('Share price growth / year', 'price')].join('');
+    const change = (value) => `<span class="${value == null ? '' : value >= 0 ? 'positive' : 'negative'}">${percent(value, 0)}</span>`;
+    const metrics = [
+      ['Net income', (year) => compactMoney(year?.netIncome)],
+      ['Diluted EPS', (year) => money(year?.eps)],
+      ['Dividends / share', (year) => year?.dividend == null ? '—' : money(year.dividend)],
+      ['Year-end price', (year) => money(year?.price)],
+      ['Price change', (year) => change(year?.priceChange)]
+    ];
+    const cells = (render, pick) => mine.map((year) => { const item = pick(year); return `<td${item ? ` title="Fiscal year ending ${escapeHtml(item.end)}"` : ''}>${item ? render(item) : '—'}</td>`; }).join('');
+    $('rival-table').innerHTML = `<thead><tr><th>FISCAL YEAR</th>${mine.map((year) => `<th>${year.year}</th>`).join('')}</tr></thead><tbody>${metrics.map(([label, render]) =>
+      `<tr class="metric-start"><td>${label} ${tag(company)}</td>${cells(render, (year) => year)}</tr><tr class="rival"><td>${label} ${tag(other)}</td>${cells(render, (year) => theirs.get(year.year))}</tr>`
+    ).join('')}</tbody>`;
+    $('rival-table').parentElement.scrollLeft = $('rival-table').parentElement.scrollWidth;
+    const lastEnd = (item) => M.yearRecord(item).at(-1)?.end;
+    const monthDay = (date) => date ? new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(new Date(`${date}T00:00:00Z`)) : '—';
+    if (lastEnd(company)?.slice(5, 7) !== lastEnd(other)?.slice(5, 7)) {
+      $('rival-summary').insertAdjacentHTML('beforeend', `<div class="rival-note">Fiscal years are matched by their label, but they end at different times: ${escapeHtml(company.ticker)} around ${monthDay(lastEnd(company))}, ${escapeHtml(other.ticker)} around ${monthDay(lastEnd(other))}. Hover a figure for its exact period.</div>`);
+    }
+  }
+
   function renderPortfolio() {
     const priced = (ticker) => companies[ticker]?.rows?.length > 0;
     const active = holdings.filter((item) => priced(item.ticker) && item.shares > 0);
@@ -525,6 +653,9 @@
   $('scenario-toggle').addEventListener('change', renderResearch);
   for (const id of ['erp-input', 'dcf-growth', 'dcf-terminal', 'dcf-discount']) $(id).addEventListener('input', renderFundamentals);
   $('peer-add').addEventListener('click', addPeers);
+  $('rival-set').addEventListener('click', () => setRival($('rival-input').value));
+  $('rival-input').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); setRival($('rival-input').value); } });
+  $('rival-picks').addEventListener('click', (event) => { const button = event.target.closest('[data-rival]'); if (button) setRival(button.dataset.rival); });
   $('peer-input').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addPeers(); } });
   $('peer-table').addEventListener('click', (event) => { const button = event.target.closest('[data-remove-peer]'); if (!button) return; peerLists[selectedTicker] = (peerLists[selectedTicker] || []).filter((ticker) => ticker !== button.dataset.removePeer); saveStore('lattice.peers.v1', peerLists); renderFundamentals(); });
   $('growth-input').addEventListener('input', renderResearch);

@@ -1,6 +1,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { median, cagr, calculate, annualSummary } = require('../math.js');
+const { median, cagr, calculate, annualSummary, yearRecord, recordGrowth } = require('../math.js');
+
+test('the ten-year record takes the month-end close nearest each fiscal year end', () => {
+  const rows = [
+    { date: '2022-09-30', price: 100 },
+    { date: '2023-08-31', price: 90 },
+    { date: '2023-09-29', price: 110 },
+    { date: '2024-08-30', price: 95 },
+    // The fiscal year ends Saturday 2024-09-28; the month's last trading day is the Monday after.
+    { date: '2024-09-30', price: 121 },
+    { date: '2024-10-31', price: 500 }
+  ];
+  const annual = [
+    { year: 2022, end: '2022-10-01', netIncome: 50, eps: 1, dividend: 0.4 },
+    { year: 2023, end: '2023-09-30', netIncome: 55, eps: 1.1, dividend: 0.44 },
+    { year: 2024, end: '2024-09-28', netIncome: 60.5, eps: 1.21, dividend: null }
+  ];
+  const record = yearRecord({ rows, annual });
+  assert.deepEqual(record.map((year) => year.price), [100, 110, 121]);
+  assert.equal(record[0].priceChange, null);
+  assert.ok(Math.abs(record[1].priceChange - 0.1) < 1e-10);
+  assert.ok(Math.abs(record[2].priceChange - 0.1) < 1e-10);
+  assert.equal(yearRecord({ rows: [], annual })[1].price, null);
+  assert.equal(record[2].dividend, null);
+  assert.ok(Math.abs(recordGrowth(record, 'netIncome') - 0.1) < 0.002);
+  assert.equal(recordGrowth(record.slice(0, 1), 'netIncome'), null);
+});
 
 test('annual summary reports EPS change, price range and average PE per fiscal year', () => {
   const rows = [

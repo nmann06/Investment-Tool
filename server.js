@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { fetchCompanyData, fetchQuote, combine, fetchFredSeries, fetchFredLatest, monthlyPrices, ProviderError } = require('./provider');
+const { fetchCompanyData, fetchQuote, fetchProfile, combine, fetchFredSeries, fetchFredLatest, monthlyPrices, ProviderError } = require('./provider');
 const auth = require('./auth');
 
 const root = __dirname;
@@ -22,6 +22,8 @@ const cache = new Map();
 const inFlight = new Map();
 let market = null;
 let marketInFlight = null;
+const profiles = new Map();
+const MAX_PROFILES = 200;
 const quotes = new Map();
 const quoteFlights = new Map();
 const cacheDurationMs = 24 * 60 * 60 * 1000;
@@ -194,6 +196,31 @@ async function handleCompany(request, response, url) {
   }
 }
 
+// The business description from the latest 10-K. It changes once a year, so it is cached for a day like company data.
+async function handleProfile(request, response, url) {
+  if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
+  const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
+  if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) return sendJson(response, 400, { error: 'Enter a valid ticker.' });
+  const saved = profiles.get(symbol);
+  if (saved && Date.now() - saved.time < cacheDurationMs) return sendJson(response, 200, saved.profile);
+  const flight = `${symbol}:profile`;
+  if (!inFlight.has(flight)) {
+    if (!allowLookup(request)) return saved ? sendJson(response, 200, saved.profile) : sendJson(response, 429, { error: 'Too many lookups in the last hour. Try again shortly.' });
+    inFlight.set(flight, fetchProfile(symbol, { userAgent: setting('SEC_USER_AGENT') }).finally(() => inFlight.delete(flight)));
+  }
+  try {
+    const profile = await inFlight.get(flight);
+    profiles.delete(symbol);
+    profiles.set(symbol, { time: Date.now(), profile });
+    while (profiles.size > MAX_PROFILES) profiles.delete(profiles.keys().next().value);
+    return sendJson(response, 200, profile);
+  } catch (error) {
+    if (saved) return sendJson(response, 200, saved.profile);
+    const status = error instanceof ProviderError ? error.status : 502;
+    return sendJson(response, status, { error: error instanceof ProviderError ? error.message : 'Could not load the company description.' });
+  }
+}
+
 http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   if (url.pathname === '/health') return sendJson(response, 200, { ok: true });
@@ -211,6 +238,7 @@ http.createServer(async (request, response) => {
   }
   if (url.pathname === '/api/company') return handleCompany(request, response, url);
   if (url.pathname === '/api/market') return handleMarket(request, response);
+  if (url.pathname === '/api/profile') return handleProfile(request, response, url);
   const file = files[url.pathname];
   if (!file || (request.method !== 'GET' && request.method !== 'HEAD')) {
     response.writeHead(404).end('Not found');

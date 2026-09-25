@@ -29,6 +29,8 @@ There is no build step. The browser loads `app.js`, `math.js` and the HTML/CSS a
 - Current P/E, normal (median) P/E, fair value, margin of safety, EPS growth, dividend yield, payout ratio and annualized return over the window.
 - Year-by-year table of diluted EPS, EPS change, dividends, payout ratio, price range and average P/E.
 - Editable five-year scenario (EPS growth and exit P/E) with implied price and total return.
+- **What the company does**, first on the Research page: the opening of "Item 1. Business" from the latest 10-K, with the full section and a link to the filing. Cached for a day on the server and 30 days in the browser.
+- **Head to head** on the Fundamentals page: ten fiscal years of net income, diluted EPS, dividends per share and year-end share price for the company and its closest competitor, with growth rates for each. Fiscal years are matched by label, and the year-end price is the month-end close nearest each fiscal year end.
 - Real U.S. companies loaded on demand, plus CSV import.
 - Prices for the open ticker and every holding refresh every minute while the tab is visible.
 - Holdings saved in the browser's local storage. Loaded tickers are cached in the browser for a week.
