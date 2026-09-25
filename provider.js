@@ -96,8 +96,19 @@ async function providerQuery(fn, symbol, key, fetchImpl = fetch) {
   let data;
   try { data = await response.json(); }
   catch { throw new ProviderError('The market-data provider returned invalid JSON.'); }
-  if (data?.Note || data?.Information) throw new ProviderError('The provider rejected the request or its request limit was reached. Check your API key and plan.', 429);
-  if (data?.['Error Message']) throw new ProviderError('The ticker was not found by the market-data provider.', 404);
+  const providerNotice = String(data?.Note || data?.Information || '');
+  if (providerNotice) {
+    if (/premium/i.test(providerNotice)) throw new ProviderError('Alpha Vantage requires a premium plan for this dataset.', 402);
+    if (/rate limit|call frequency|requests? per day|daily limit|standard api usage limit/i.test(providerNotice)) {
+      throw new ProviderError('Alpha Vantage’s daily request limit was reached. Try again after the limit resets.', 429);
+    }
+    if (/api key/i.test(providerNotice)) throw new ProviderError('Alpha Vantage rejected the configured API key. Check it in Render’s environment settings.', 502);
+    throw new ProviderError('Alpha Vantage could not complete this request. Try again later.', 502);
+  }
+  if (data?.['Error Message']) {
+    const suggestion = symbol === 'APPL' ? ' Did you mean AAPL (Apple)?' : '';
+    throw new ProviderError(`Ticker ${symbol} was not found.${suggestion}`, 404);
+  }
   return data;
 }
 

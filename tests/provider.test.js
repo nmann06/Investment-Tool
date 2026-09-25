@@ -63,3 +63,15 @@ test('loads the four documented provider datasets and returns chart rows', async
   assert.deepEqual(called.sort(), Object.keys(fixtures).sort());
   assert.equal(company.rows.at(-1).price, 60);
 });
+
+test('explains an invalid Apple ticker without making more provider calls', async () => {
+  let calls = 0;
+  const fetchMock = async () => { calls++; return { ok: true, json: async () => ({ 'Error Message': 'Invalid API call.' }) }; };
+  await assert.rejects(fetchCompany('APPL', 'test-key', fetchMock), /Did you mean AAPL/);
+  assert.equal(calls, 1);
+});
+
+test('identifies the provider daily limit separately from ticker errors', async () => {
+  const fetchMock = async () => ({ ok: true, json: async () => ({ Information: 'Our standard API rate limit is 25 requests per day.' }) });
+  await assert.rejects(fetchCompany('AAPL', 'test-key', fetchMock), /daily request limit/);
+});
