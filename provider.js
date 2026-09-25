@@ -268,9 +268,9 @@ async function lookupCik(symbol, options) {
 async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPrices = [], onRequest, onPrices } = {}) {
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) throw new ProviderError('Invalid ticker.', 400);
   if (!key) throw new ProviderError('Set FINANCIALDATA_API_KEY on the server.', 503);
-  const sec = { fetchImpl, headers: { 'User-Agent': userAgent || 'Lattice investment research (nathanielmann.ca)', Accept: 'application/json' } };
+  const sec = { fetchImpl, headers: { 'User-Agent': userAgent || 'Lettuce investment research (nathanielmann.ca)', Accept: 'application/json' } };
   const entry = await lookupCik(symbol, sec);
-  if (!entry) throw new ProviderError(`${symbol} was not found in SEC filings. Lattice supports U.S.-listed companies that file 10-K and 10-Q reports.`, 404);
+  if (!entry) throw new ProviderError(`${symbol} was not found in SEC filings. Lettuce supports U.S.-listed companies that file 10-K and 10-Q reports.`, 404);
   const cik = String(entry.cik_str).padStart(10, '0');
   const [facts, submissions, prices] = await Promise.all([
     fetchJson(`${SEC_FACTS}CIK${cik}.json`, sec, 'SEC EDGAR'),

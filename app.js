@@ -195,7 +195,7 @@
     const svg = $('valuation-chart');
     const width = Math.max(300, svg.clientWidth || 900), height = Math.max(200, svg.clientHeight || 290);
     svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-    if (!result || result.period.length < 2) { svg.innerHTML = `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#9ba9b8" font-size="13">At least two observations are needed to draw a chart.</text>`; return; }
+    if (!result || result.period.length < 2) { svg.innerHTML = `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#9bb8aa" font-size="13">At least two observations are needed to draw a chart.</text>`; return; }
     const rows = result.period;
     const priceOnly = rows.every((row) => row.eps == null);
     const lineMultiple = multipleMode === 'normal' ? M.GRAHAM_PE : result.normalPe;
@@ -219,14 +219,14 @@
     const area = (points) => `M${x(points[0].t).toFixed(1)},${bottom} ${points.map((point) => `L${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`).join(' ')} L${x(points.at(-1).t).toFixed(1)},${bottom} Z`;
     const series = rows.map((row) => ({ t: time(row.date), row }));
     const steps = [0, .25, .5, .75, 1];
-    const grid = steps.map((step) => { const yy = bottom - step * (bottom - top); return `<line x1="${left}" y1="${yy}" x2="${right}" y2="${yy}" stroke="#edf1f5"/><text x="${left - 8}" y="${yy + 3}" text-anchor="end" fill="#a0aebb" font-size="10">${axisMoney(maxValue * step)}</text>`; }).join('');
+    const grid = steps.map((step) => { const yy = bottom - step * (bottom - top); return `<line x1="${left}" y1="${yy}" x2="${right}" y2="${yy}" stroke="#edf5f1"/><text x="${left - 8}" y="${yy + 3}" text-anchor="end" fill="#a0bbae" font-size="10">${axisMoney(maxValue * step)}</text>`; }).join('');
     const firstYear = new Date(start).getUTCFullYear() + 1, lastYear = new Date(finish).getUTCFullYear();
     const every = Math.max(1, Math.ceil((lastYear - firstYear + 1) / Math.max(4, Math.floor((right - left) / 58))));
     let ticks = '';
     for (let year = firstYear; year <= lastYear; year += every) {
       const xx = x(Date.UTC(year, 0, 1));
       if (xx < left || xx > right) continue;
-      ticks += `<line x1="${xx}" y1="${bottom}" x2="${xx}" y2="${bottom + 4}" stroke="#d5dde6"/><text x="${xx}" y="${bottom + 17}" text-anchor="middle" fill="#a0aebb" font-size="10">${year}</text>`;
+      ticks += `<line x1="${xx}" y1="${bottom}" x2="${xx}" y2="${bottom + 4}" stroke="#d5e6de"/><text x="${xx}" y="${bottom + 17}" text-anchor="middle" fill="#a0bbae" font-size="10">${year}</text>`;
     }
     let layers = '';
     if (!priceOnly) {
@@ -238,15 +238,15 @@
     }
     if (scenario) {
       const futureLine = future.map((point) => ({ t: point.t, v: point.eps * multiple }));
-      layers += `<rect x="${x(end)}" y="${top}" width="${right - x(end)}" height="${bottom - top}" fill="#f5f8fc"/><text x="${x(end) + 8}" y="${top + 12}" fill="#9aa8b8" font-size="9" font-weight="700" letter-spacing=".8">SCENARIO · ${percent(result.growthRate, 1)} EPS / YR</text>`;
+      layers += `<rect x="${x(end)}" y="${top}" width="${right - x(end)}" height="${bottom - top}" fill="#f6fbf9"/><text x="${x(end) + 8}" y="${top + 12}" fill="#9ab8aa" font-size="9" font-weight="700" letter-spacing=".8">SCENARIO · ${percent(result.growthRate, 1)} EPS / YR</text>`;
       layers += `<path d="${area(futureLine)}" fill="#f1ad6b" fill-opacity=".22"/><path d="${line(futureLine)}" fill="none" stroke="#e08a3c" stroke-width="2" stroke-dasharray="6 4"/>`;
       if (result.projectedPrice != null) {
         const px = x(future.at(-1).t), py = y(result.projectedPrice);
-        layers += `<path d="M${x(end)},${y(result.latest.price)} L${px},${py}" stroke="#16243b" stroke-width="1.6" stroke-dasharray="3 4" fill="none"/><circle cx="${px}" cy="${py}" r="4" fill="#16243b"/><text x="${px - 8}" y="${py - 9}" text-anchor="end" fill="#16243b" font-size="10" font-weight="700">${money(result.projectedPrice)}</text>`;
+        layers += `<path d="M${x(end)},${y(result.latest.price)} L${px},${py}" stroke="#163b2a" stroke-width="1.6" stroke-dasharray="3 4" fill="none"/><circle cx="${px}" cy="${py}" r="4" fill="#163b2a"/><text x="${px - 8}" y="${py - 9}" text-anchor="end" fill="#163b2a" font-size="10" font-weight="700">${money(result.projectedPrice)}</text>`;
       }
     }
     const priceLine = line(series.map((point) => ({ t: point.t, v: point.row.price })));
-    svg.innerHTML = `${grid}${layers}${ticks}<line x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}" stroke="#d5dde6"/><path d="${priceLine}" fill="none" stroke="#16243b" stroke-width="2.2" stroke-linejoin="round"/><line id="hover-line" x1="0" x2="0" y1="${top}" y2="${bottom}" stroke="#99aabd" stroke-dasharray="3 3" visibility="hidden"/><circle id="hover-dot" r="4" fill="#16243b" stroke="white" stroke-width="2" visibility="hidden"/>`;
+    svg.innerHTML = `${grid}${layers}${ticks}<line x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}" stroke="#d5e6de"/><path d="${priceLine}" fill="none" stroke="#163b2a" stroke-width="2.2" stroke-linejoin="round"/><line id="hover-line" x1="0" x2="0" y1="${top}" y2="${bottom}" stroke="#99bdac" stroke-dasharray="3 3" visibility="hidden"/><circle id="hover-dot" r="4" fill="#163b2a" stroke="white" stroke-width="2" visibility="hidden"/>`;
     svg.onpointermove = (event) => {
       const bounds = svg.getBoundingClientRect();
       const px = (event.clientX - bounds.left) * width / bounds.width;

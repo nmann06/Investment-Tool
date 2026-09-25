@@ -1,4 +1,4 @@
-# Lattice
+# Lettuce
 
 An independent, browser-based fundamentals-versus-price research tool in the spirit of FAST Graphs. It charts a company's share price against its earnings, shades an earnings-justified value (15× EPS, or the company's own normal P/E), shows dividends paid out of those earnings, projects a five-year scenario, and tracks manually entered holdings.
 
@@ -26,7 +26,7 @@ Open `http://127.0.0.1:4173` while the server is running, then choose **Investme
 
 ## Real market data
 
-Lattice combines two sources on the server:
+Lettuce combines two sources on the server:
 
 | Data | Source | Notes |
 | --- | --- | --- |
@@ -61,7 +61,7 @@ Limitations: earnings are GAAP, so one-time items such as write-downs or investm
 The repo includes `render.yaml` for a Render **web service**.
 
 1. In Render, create a new **Blueprint** from the GitHub repository. It defines a free Node web service, runs the tests during build and checks `/health`.
-2. When prompted, set `FINANCIALDATA_API_KEY` and a strong `APP_PASSWORD`. Set `SEC_USER_AGENT` to something like `Lattice research you@example.com`.
+2. When prompted, set `FINANCIALDATA_API_KEY` and a strong `APP_PASSWORD`. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`.
 3. The Blueprint adds `nathanielmann.ca` as a custom domain. Once the service is live, inspect the existing DNS records before changing them. Render's dashboard shows the exact records to add. Keep any unrelated email records intact.
 
 Render runs the server on its assigned `PORT` and host `0.0.0.0`. The free service may spin down after inactivity, which clears the in-memory cache.

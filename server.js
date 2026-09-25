@@ -186,4 +186,4 @@ http.createServer(async (request, response) => {
   response.writeHead(200, { 'Content-Type': file[1], 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   if (request.method === 'HEAD') { response.end(); return; }
   fs.createReadStream(path.join(root, file[0])).pipe(response);
-}).listen(Number(process.env.PORT) || 4173, process.env.RENDER ? '0.0.0.0' : '127.0.0.1', () => console.log(`Lattice listening on port ${Number(process.env.PORT) || 4173}`));
+}).listen(Number(process.env.PORT) || 4173, process.env.RENDER ? '0.0.0.0' : '127.0.0.1', () => console.log(`Lettuce listening on port ${Number(process.env.PORT) || 4173}`));

@@ -18,6 +18,6 @@ if not defined NODE_EXE (
   exit /b 0
 )
 
-echo Starting Lattice at http://127.0.0.1:4173
+echo Starting Lettuce at http://127.0.0.1:4173
 echo Leave this window open while using the app. Press Ctrl+C to stop it.
 "%NODE_EXE%" server.js
