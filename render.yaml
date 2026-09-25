@@ -7,7 +7,7 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     domains:
-      - nathanielmann.ca
+      - app.nathanielmann.ca
     envVars:
       - key: FINANCIALDATA_API_KEY
         sync: false

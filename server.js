@@ -5,21 +5,18 @@ const { fetchCompany, fetchFredSeries, fetchFredLatest, monthlyPrices, ProviderE
 const auth = require('./auth');
 
 const root = __dirname;
+// The personal homepage is a separate site (github.com/nmann06/homepage).
+const HOMEPAGE = 'https://nathanielmann.ca/';
 const files = {
-  '/': ['index.html', 'text/html; charset=utf-8'],
-  '/index.html': ['index.html', 'text/html; charset=utf-8'],
-  '/about': ['index.html', 'text/html; charset=utf-8'],
-  '/portfolio': ['index.html', 'text/html; charset=utf-8'],
   '/app': ['research.html', 'text/html; charset=utf-8'],
   '/research.html': ['research.html', 'text/html; charset=utf-8'],
-  '/site.css': ['site.css', 'text/css; charset=utf-8'],
-  '/site.js': ['site.js', 'text/javascript; charset=utf-8'],
+  '/login.css': ['login.css', 'text/css; charset=utf-8'],
   '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/math.js': ['math.js', 'text/javascript; charset=utf-8'],
   '/sample-data.csv': ['sample-data.csv', 'text/csv; charset=utf-8']
 };
-// The investment tool and its API sit behind the password; the personal site stays public.
+// The investment tool and its API sit behind the password; only the sign-in page is public.
 const protectedFiles = new Set(['/app', '/research.html', '/styles.css', '/app.js', '/math.js', '/sample-data.csv']);
 const cache = new Map();
 const inFlight = new Map();
@@ -210,7 +207,8 @@ http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   if (url.pathname === '/health') return sendJson(response, 200, { ok: true });
   if (url.pathname === '/login') return handleLogin(request, response, url);
-  if (url.pathname === '/logout') return redirect(response, '/', { 'Set-Cookie': `${auth.COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0` });
+  if (url.pathname === '/') return redirect(response, `/app${url.search}`);
+  if (url.pathname === '/logout') return redirect(response, HOMEPAGE, { 'Set-Cookie': `${auth.COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0` });
   const isApi = url.pathname.startsWith('/api/');
   if ((isApi || protectedFiles.has(url.pathname)) && !signedIn(request)) {
     if (isApi) return sendJson(response, 401, { error: 'Your session has ended. Reload the page to sign in again.' });

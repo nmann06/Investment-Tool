@@ -13,11 +13,11 @@ if not defined NODE_EXE (
 )
 
 if not defined NODE_EXE (
-  echo Node.js was not found. Opening the app directly in your browser.
-  start "" "%~dp0index.html"
-  exit /b 0
+  echo Node.js was not found. Install Node.js 20 or newer to run Lettuce.
+  pause
+  exit /b 1
 )
 
-echo Starting Lettuce at http://127.0.0.1:4173
+echo Starting Lettuce at http://127.0.0.1:4173/app
 echo Leave this window open while using the app. Press Ctrl+C to stop it.
 "%NODE_EXE%" server.js

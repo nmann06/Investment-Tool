@@ -2,17 +2,25 @@
 
 An independent, browser-based fundamentals-versus-price research tool in the spirit of FAST Graphs. It charts a company's share price against its earnings, shades an earnings-justified value (15× EPS, or the company's own normal P/E), shows dividends paid out of those earnings, projects a five-year scenario, and tracks manually entered holdings.
 
+Live at [app.nathanielmann.ca](https://app.nathanielmann.ca/app) (password protected). It is linked from Nathaniel Mann's homepage, [nathanielmann.ca](https://nathanielmann.ca), which lives in its own repository, [nmann06/homepage](https://github.com/nmann06/homepage).
+
+## Setup
+
+Requires Node.js 20 or newer. There are no npm dependencies. To use real price data, copy `.env.local.example` to `.env.local` and fill in the values (see [Real market data](#real-market-data)). `.env.local` is git-ignored and must never be committed.
+
 ## Run
 
-On Windows, double-click `start.cmd`. It uses an available Node.js runtime to start the local server. If Node.js is unavailable, it opens `index.html` directly instead.
-
-If Node.js is installed on your PATH, you can also run:
+On Windows, double-click `start.cmd`. It uses an available Node.js runtime to start the local server. If Node.js is on your PATH, you can also run:
 
 ```bash
-node server.js
+npm start
 ```
 
-Open `http://127.0.0.1:4173` while the server is running, then choose **Investment Tool**. Link straight to a company with `http://127.0.0.1:4173/app?ticker=AAPL`. To run the tests, double-click `test.cmd` or run `npm test`.
+Open `http://127.0.0.1:4173/app` while the server is running. Link straight to a company with `http://127.0.0.1:4173/app?ticker=AAPL`.
+
+## Build and test
+
+There is no build step. The browser loads `app.js`, `math.js` and the HTML/CSS as they are. To run the tests, double-click `test.cmd` or run `npm test`. Render runs the same tests on every deploy.
 
 ## Features
 
@@ -79,7 +87,7 @@ The server budgets 280 FinancialData.net requests a day, leaving headroom under 
 
 ## Password
 
-The homepage is public. The investment tool (`/app`) and its API require the password in `APP_PASSWORD`. Visitors sign in once, and a signed session cookie keeps them in for 30 days. Changing the password signs everyone out. Failed attempts are limited to 10 per IP per 15 minutes. Locally the tool stays open if `APP_PASSWORD` is unset. On Render it is always locked, and it stays locked until the password is set.
+The tool (`/app`) and its API require the password in `APP_PASSWORD`. Only the sign-in page and `/health` are public, and `/` redirects to `/app`. Visitors sign in once, and a signed session cookie keeps them in for 30 days. Changing the password signs everyone out. Failed attempts are limited to 10 per IP per 15 minutes. Locally the tool stays open if `APP_PASSWORD` is unset. On Render it is always locked, and it stays locked until the password is set.
 
 ### How the earnings line is built
 
@@ -92,11 +100,11 @@ Limitations: earnings are GAAP, so one-time items such as write-downs or investm
 
 ## Deploy on Render
 
-The repo includes `render.yaml` for a Render **web service**.
+The repo includes `render.yaml` for a Render **web service** named `lattice-investment-tool`. Every push to `main` redeploys it. The homepage is a separate Render service with its own repository, so changes there never redeploy the tool.
 
 1. In Render, create a new **Blueprint** from the GitHub repository. It defines a free Node web service, runs the tests during build and checks `/health`.
-2. When prompted, set `FINANCIALDATA_API_KEY` and a strong `APP_PASSWORD`. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`.
-3. The Blueprint adds `nathanielmann.ca` as a custom domain. Once the service is live, inspect the existing DNS records before changing them. Render's dashboard shows the exact records to add. Keep any unrelated email records intact.
+2. When prompted, set `FINANCIALDATA_API_KEY` and a strong `APP_PASSWORD`. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`. These secrets live only in Render's environment settings, never in the repository.
+3. The Blueprint adds `app.nathanielmann.ca` as a custom domain. Add the CNAME record Render shows at your DNS provider. Keep any unrelated records intact.
 
 Render runs the server on its assigned `PORT` and host `0.0.0.0`. The free service may spin down after inactivity, which clears the in-memory cache.
 
