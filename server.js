@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { fetchCompany, ProviderError, MAX_PAGES } = require('./provider');
+const { fetchCompany, fetchFredSeries, fetchFredLatest, monthlyPrices, ProviderError, MAX_PAGES } = require('./provider');
 const auth = require('./auth');
 
 const root = __dirname;
@@ -22,7 +22,10 @@ const files = {
 // The investment tool and its API sit behind the password; the personal site stays public.
 const protectedFiles = new Set(['/app', '/research.html', '/styles.css', '/app.js', '/math.js', '/sample-data.csv']);
 const cache = new Map();
+const peerCache = new Map();
 const inFlight = new Map();
+let market = null;
+let marketInFlight = null;
 const priceHistory = new Map();
 const cacheDurationMs = 24 * 60 * 60 * 1000;
 const DAILY_PROVIDER_BUDGET = 280;
@@ -115,10 +118,11 @@ function providerBudgetLeft(now = Date.now()) {
 function allowLookup(request, cost) {
   const now = Date.now();
   if (providerBudgetLeft(now) < cost) return false;
+  // Each visitor may spend up to 60 provider requests an hour (about five new tickers, or many peers and refreshes).
   const ip = clientIp(request);
   const previous = (ipLookups.get(ip) || []).filter((time) => time > now - 3600000);
-  if (previous.length >= 6) return false;
-  previous.push(now);
+  if (previous.length + cost > 60) return false;
+  for (let i = 0; i < cost; i++) previous.push(now);
   ipLookups.set(ip, previous);
   return true;
 }
@@ -129,12 +133,55 @@ function keepPrices(symbol, records) {
   while (priceHistory.size > MAX_PRICE_HISTORIES) priceHistory.delete(priceHistory.keys().next().value);
 }
 
+// Risk-free rate and a market proxy for beta, both from FRED's keyless CSV downloads. Refreshed daily.
+// Month-end S&P 500 values are sent so the browser can calculate beta; the tool never displays the index itself.
+async function loadMarket() {
+  const options = { userAgent: setting('SEC_USER_AGENT') };
+  const [treasury, index] = await Promise.all([
+    fetchFredLatest('DGS10', options).catch(() => null),
+    fetchFredSeries('SP500', options).catch(() => null)
+  ]);
+  const riskFree = treasury ? { rate: treasury.value / 100, date: treasury.date, source: 'FRED DGS10 (10-year Treasury)' } : market?.riskFree || null;
+  const benchmark = index ? { name: 'S&P 500', rows: monthlyPrices(index.map((item) => ({ date: item.date, close: item.value }))) } : market?.benchmark || null;
+  return { time: Date.now(), riskFree, benchmark };
+}
+
+async function handleMarket(request, response) {
+  if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
+  if (!market || Date.now() - market.time > cacheDurationMs) {
+    if (!marketInFlight) marketInFlight = loadMarket().finally(() => { marketInFlight = null; });
+    market = await marketInFlight;
+  }
+  return sendJson(response, 200, { riskFree: market.riskFree, benchmark: market.benchmark });
+}
+
+// Peers only need the latest price, so they fetch a single page of history.
+async function handlePeer(request, response, symbol, key) {
+  const full = cache.get(symbol);
+  if (full && Date.now() - full.time < cacheDurationMs) return sendJson(response, 200, full.company);
+  const saved = peerCache.get(symbol);
+  if (saved && Date.now() - saved.time < cacheDurationMs) return sendJson(response, 200, saved.company);
+  if (!allowLookup(request, 1)) {
+    if (saved || full) return sendJson(response, 200, { ...(saved || full).company, stale: true });
+    return sendJson(response, 429, { error: 'Today’s live-data allowance has been used. Try again tomorrow.' });
+  }
+  try {
+    const company = await fetchCompany(symbol, key, { userAgent: setting('SEC_USER_AGENT'), maxPages: 1, onRequest: () => providerCalls.push(Date.now()) });
+    peerCache.set(symbol, { time: Date.now(), company });
+    return sendJson(response, 200, company);
+  } catch (error) {
+    const status = error instanceof ProviderError ? error.status : 502;
+    return sendJson(response, status, { error: error instanceof ProviderError ? error.message : 'Could not load market data.' });
+  }
+}
+
 async function handleCompany(request, response, url) {
   if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
   const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) return sendJson(response, 400, { error: 'Enter a valid ticker.' });
   const key = apiKey();
   if (!key) return sendJson(response, 503, { error: 'Add FINANCIALDATA_API_KEY to the server configuration.' });
+  if (url.searchParams.get('depth') === 'peer') return handlePeer(request, response, symbol, key);
   const saved = cache.get(symbol);
   if (saved && Date.now() - saved.time < cacheDurationMs) return sendJson(response, 200, saved.company);
   const known = priceHistory.get(symbol) || [];
@@ -178,6 +225,7 @@ http.createServer(async (request, response) => {
     return sendJson(response, 200, { provider: 'FinancialData.net + SEC EDGAR', configured: Boolean(apiKey()), fundamentals: true, signOut: authRequired() });
   }
   if (url.pathname === '/api/company') return handleCompany(request, response, url);
+  if (url.pathname === '/api/market') return handleMarket(request, response);
   const file = files[url.pathname];
   if (!file || (request.method !== 'GET' && request.method !== 'HEAD')) {
     response.writeHead(404).end('Not found');

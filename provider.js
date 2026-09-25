@@ -2,11 +2,39 @@ const PRICE_BASE = 'https://financialdata.net/api/v1/stock-prices';
 const SEC_TICKERS = 'https://www.sec.gov/files/company_tickers.json';
 const SEC_FACTS = 'https://data.sec.gov/api/xbrl/companyfacts/';
 const SEC_SUBMISSIONS = 'https://data.sec.gov/submissions/';
+// FRED's graph CSV download needs no API key. DGS10 is the 10-year Treasury constant-maturity yield.
+const FRED_CSV = 'https://fred.stlouisfed.org/graph/fredgraph.csv?id=';
 const PAGE_SIZE = 300;
 const MAX_PAGES = 12;
 const DAY = 86400000;
 const EPS_TAGS = ['EarningsPerShareDiluted', 'EarningsPerShareBasicAndDiluted', 'EarningsPerShareBasic'];
 const DIVIDEND_TAGS = ['CommonStockDividendsPerShareDeclared', 'CommonStockDividendsPerShareCashPaid'];
+// Filers switch tags over time, so each line item lists alternatives in priority order.
+const FLOW_TAGS = {
+  revenue: ['Revenues', 'RevenueFromContractWithCustomerExcludingAssessedTax', 'SalesRevenueNet', 'RevenueFromContractWithCustomerIncludingAssessedTax', 'SalesRevenueGoodsNet'],
+  costOfRevenue: ['CostOfRevenue', 'CostOfGoodsAndServicesSold', 'CostOfGoodsSold'],
+  grossProfit: ['GrossProfit'],
+  operatingIncome: ['OperatingIncomeLoss'],
+  netIncome: ['NetIncomeLoss', 'ProfitLoss'],
+  pretaxIncome: ['IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest', 'IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments'],
+  incomeTax: ['IncomeTaxExpenseBenefit'],
+  interestExpense: ['InterestExpense', 'InterestExpenseNonoperating', 'InterestExpenseDebt'],
+  depreciation: ['DepreciationDepletionAndAmortization', 'DepreciationAmortizationAndOther', 'DepreciationAndAmortization', 'DepreciationAmortizationAndAccretionNet', 'Depreciation'],
+  operatingCashFlow: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations'],
+  capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquireProductiveAssets']
+};
+const INSTANT_TAGS = {
+  cashAndShortTerm: ['CashCashEquivalentsAndShortTermInvestments'],
+  cash: ['CashAndCashEquivalentsAtCarryingValue', 'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents', 'Cash'],
+  shortTermInvestments: ['ShortTermInvestments', 'MarketableSecuritiesCurrent', 'AvailableForSaleSecuritiesDebtSecuritiesCurrent'],
+  longTermDebt: ['LongTermDebt'],
+  longTermDebtNoncurrent: ['LongTermDebtNoncurrent', 'LongTermDebtAndCapitalLeaseObligations'],
+  longTermDebtCurrent: ['LongTermDebtCurrent', 'LongTermDebtAndCapitalLeaseObligationsCurrent'],
+  commercialPaper: ['CommercialPaper'],
+  shortTermBorrowings: ['ShortTermBorrowings'],
+  equity: ['StockholdersEquity', 'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest']
+};
+const SHARE_TAGS = ['WeightedAverageNumberOfDilutedSharesOutstanding', 'WeightedAverageNumberOfShareOutstandingBasicAndDiluted'];
 const SPLIT_RATIOS = [1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50];
 
 class ProviderError extends Error {
@@ -31,6 +59,7 @@ const days = (start, end) => Math.round((time(end) - time(start)) / DAY);
 function durationKind(start, end) {
   const length = days(start, end);
   if (length >= 70 && length <= 110) return 'Q';
+  if (length >= 160 && length <= 200) return 'H';
   if (length >= 250 && length <= 290) return '9M';
   if (length >= 340 && length <= 390) return 'FY';
   return null;
@@ -47,17 +76,31 @@ function monthlyPrices(records) {
   return [...monthly.values()];
 }
 
-// Per-share facts from 10-K/10-Q filings with a usable period length.
-function shareFacts(usGaap, tags) {
+// Duration facts (income statement, cash flow, per-share) from 10-K/10-Q filings with a usable period length.
+function periodFacts(usGaap, tags, unit = 'USD/shares') {
   const facts = [];
   tags.forEach((tag, priority) => {
-    for (const item of usGaap?.[tag]?.units?.['USD/shares'] || []) {
+    for (const item of usGaap?.[tag]?.units?.[unit] || []) {
       if (!String(item.form || '').startsWith('10-') || !validDate(item.start) || !validDate(item.end) || !validDate(item.filed) || !Number.isFinite(item.val)) continue;
       const kind = durationKind(item.start, item.end);
       if (kind) facts.push({ tag, priority, kind, start: item.start, end: item.end, val: item.val, filed: item.filed });
     }
   });
   return facts;
+}
+const shareFacts = (usGaap, tags) => periodFacts(usGaap, tags, 'USD/shares');
+
+// Point-in-time balance-sheet facts; the latest filing wins for each date.
+function instantValues(usGaap, tags, unit = 'USD') {
+  const values = new Map();
+  tags.forEach((tag, priority) => {
+    for (const item of usGaap?.[tag]?.units?.[unit] || []) {
+      if (item.start || !String(item.form || '').startsWith('10-') || !validDate(item.end) || !validDate(item.filed) || !Number.isFinite(item.val)) continue;
+      const saved = values.get(item.end);
+      if (!saved || priority < saved.priority || (priority === saved.priority && item.filed > saved.filed)) values.set(item.end, { priority, filed: item.filed, value: item.val });
+    }
+  });
+  return new Map([...values].map(([end, item]) => [end, item.value]));
 }
 
 function matchingRatio(oldValue, newValue) {
@@ -111,11 +154,12 @@ function detectSplits(facts) {
 }
 
 // Restates each fact to the current share basis and keeps the latest filing for each period.
-function adjustedPeriods(facts, splits) {
+// Per-share values divide by later splits, share counts multiply, and dollar amounts are unchanged.
+function adjustedPeriods(facts, splits, mode = 'perShare') {
   const periods = new Map();
   for (const fact of facts) {
-    const factor = splits.filter((split) => split.date > fact.filed).reduce((product, split) => product * split.ratio, 1);
-    const value = fact.val / factor;
+    const factor = mode === 'amount' ? 1 : splits.filter((split) => split.date > fact.filed).reduce((product, split) => product * split.ratio, 1);
+    const value = mode === 'shares' ? fact.val * factor : fact.val / factor;
     const key = `${fact.start}|${fact.end}`;
     const saved = periods.get(key);
     if (!saved || fact.priority < saved.priority || (fact.priority === saved.priority && fact.filed > saved.filed)) {
@@ -162,12 +206,80 @@ function valueAt(series, date) {
   return previous.value + (next.value - previous.value) * weight;
 }
 
+const shiftYears = (date, years) => { const shifted = new Date(time(date)); shifted.setUTCFullYear(shifted.getUTCFullYear() + years); return shifted.toISOString().slice(0, 10); };
+
+// Most recent trailing-twelve-month total. 10-Qs report cash flows year-to-date, so
+// TTM = last fiscal year + this year-to-date − the same year-to-date a year earlier.
+function latestTtm(periods) {
+  const candidates = periods.filter((item) => item.kind).sort((a, b) => b.end.localeCompare(a.end) || (b.kind === 'FY') - (a.kind === 'FY'));
+  for (const item of candidates) {
+    if (item.kind === 'FY') return { end: item.end, value: item.value };
+    const priorYear = periods.find((other) => other.kind === 'FY' && other.end < item.start && near(other.end, item.start, 10));
+    const priorToDate = periods.find((other) => other.kind === item.kind && near(other.end, shiftYears(item.end, -1), 20) && near(other.start, shiftYears(item.start, -1), 20));
+    if (priorYear && priorToDate) return { end: item.end, value: priorYear.value + item.value - priorToDate.value };
+  }
+  return null;
+}
+
 function fiscalYear(end) {
   const [year, month, day] = end.split('-').map(Number);
   return month === 1 && day <= 7 ? year - 1 : year;
 }
 
-function buildFundamentals(usGaap) {
+// Raw statement values per fiscal year, plus the latest trailing-twelve-month flows and balance sheet.
+// Ratios are calculated in math.js from these raw values.
+function buildStatements(usGaap, dei, splits) {
+  const flows = Object.fromEntries(Object.entries(FLOW_TAGS).map(([name, tags]) => [name, adjustedPeriods(periodFacts(usGaap, tags, 'USD'), splits, 'amount')]));
+  const shares = adjustedPeriods(periodFacts(usGaap, SHARE_TAGS, 'shares'), splits, 'shares');
+  const instants = Object.fromEntries(Object.entries(INSTANT_TAGS).map(([name, tags]) => [name, instantValues(usGaap, tags)]));
+  const round = (value) => value == null || !Number.isFinite(value) ? null : Math.round(value);
+  const balanceAt = (end) => {
+    const get = (name) => instants[name].get(end) ?? null;
+    const any = (...names) => names.some((name) => get(name) != null);
+    const cash = get('cashAndShortTerm') ?? (any('cash', 'shortTermInvestments') ? (get('cash') || 0) + (get('shortTermInvestments') || 0) : null);
+    const longTerm = get('longTermDebt') ?? (any('longTermDebtNoncurrent', 'longTermDebtCurrent') ? (get('longTermDebtNoncurrent') || 0) + (get('longTermDebtCurrent') || 0) : null);
+    const hasDebt = longTerm != null || any('commercialPaper', 'shortTermBorrowings');
+    // A balance sheet with equity but no debt lines means the company carries no financial debt.
+    const debt = hasDebt ? (longTerm || 0) + (get('commercialPaper') || 0) + (get('shortTermBorrowings') || 0) : get('equity') != null ? 0 : null;
+    return { cash: round(cash), debt: round(debt), equity: round(get('equity')) };
+  };
+  const fyValue = (periods, end) => periods.find((item) => item.kind === 'FY' && item.end === end)?.value ?? null;
+  const flowAt = (end) => {
+    const values = Object.fromEntries(Object.keys(FLOW_TAGS).map((name) => [name, fyValue(flows[name], end)]));
+    if (values.grossProfit == null && values.revenue != null && values.costOfRevenue != null) values.grossProfit = values.revenue - values.costOfRevenue;
+    delete values.costOfRevenue;
+    return Object.fromEntries(Object.entries(values).map(([name, value]) => [name, round(value)]));
+  };
+  const years = [...new Set(flows.revenue.concat(flows.netIncome).filter((item) => item.kind === 'FY').map((item) => item.end))].sort();
+  const annual = new Map(years.map((end) => [end, { ...flowAt(end), dilutedShares: round(fyValue(shares, end)), ...balanceAt(end) }]));
+
+  const ttm = {};
+  for (const name of Object.keys(FLOW_TAGS)) {
+    const latest = latestTtm(flows[name]);
+    if (latest) { ttm[name] = round(latest.value); if (['revenue', 'operatingCashFlow'].includes(name) && (!ttm.end || latest.end > ttm.end)) ttm.end = latest.end; }
+  }
+  if (ttm.grossProfit == null && ttm.revenue != null && ttm.costOfRevenue != null) ttm.grossProfit = ttm.revenue - ttm.costOfRevenue;
+  delete ttm.costOfRevenue;
+
+  const balanceDates = [...new Set([...instants.equity.keys(), ...instants.cash.keys()])].sort();
+  const balanceEnd = balanceDates.at(-1);
+  const balance = balanceEnd ? { end: balanceEnd, ...balanceAt(balanceEnd) } : null;
+
+  const latestShares = [...shares].sort((a, b) => b.end.localeCompare(a.end) || (a.kind === 'Q' ? -1 : 1))[0];
+  // Cover-page share count is the most current figure. Multi-class filers may omit it, so fall back to diluted shares.
+  const cover = (dei?.EntityCommonStockSharesOutstanding?.units?.shares || []).filter((item) => validDate(item.end) && validDate(item.filed) && Number.isFinite(item.val));
+  const coverEnd = cover.map((item) => item.end).sort().at(-1);
+  const coverFacts = cover.filter((item) => item.end === coverEnd);
+  const coverFiled = coverFacts.map((item) => item.filed).sort().at(-1);
+  const coverShares = coverFacts.filter((item) => item.filed === coverFiled).reduce((sum, item) => sum + item.val, 0);
+  const coverFactor = splits.filter((split) => split.date > coverFiled).reduce((product, split) => product * split.ratio, 1);
+  const sharesOutstanding = coverShares > 0 && (!latestShares || coverEnd >= latestShares.end)
+    ? { value: round(coverShares * coverFactor), date: coverEnd, source: 'Cover page shares outstanding' }
+    : latestShares ? { value: round(latestShares.value), date: latestShares.end, source: 'Diluted weighted-average shares' } : null;
+  return { annual, ttm, balance, sharesOutstanding };
+}
+
+function buildFundamentals(usGaap, dei = null) {
   const epsFacts = shareFacts(usGaap, EPS_TAGS);
   if (!epsFacts.length) throw new ProviderError('SEC filings for this company do not include U.S. GAAP earnings per share.', 422);
   const dividendFacts = shareFacts(usGaap, DIVIDEND_TAGS);
@@ -179,24 +291,24 @@ function buildFundamentals(usGaap) {
   const dividendByEnd = new Map(dividendPeriods.filter((item) => item.kind === 'FY').map((item) => [item.end, item.value]));
   const firstDividend = dividendPeriods.map((item) => item.start).sort()[0];
   const annualDividend = (end) => dividendByEnd.has(end) ? +dividendByEnd.get(end).toFixed(4) : !firstDividend || end < firstDividend ? 0 : null;
-  const annual = epsPeriods
-    .filter((item) => item.kind === 'FY')
-    .sort((a, b) => a.end.localeCompare(b.end))
-    .map((item) => ({ year: fiscalYear(item.end), end: item.end, eps: +item.value.toFixed(4), dividend: annualDividend(item.end) }));
-  return { eps, dividends, annual, splits, paysDividends: dividendFacts.length > 0 };
+  const statements = buildStatements(usGaap, dei, splits);
+  const epsByEnd = new Map(epsPeriods.filter((item) => item.kind === 'FY').map((item) => [item.end, item.value]));
+  const annual = [...new Set([...epsByEnd.keys(), ...statements.annual.keys()])]
+    .sort()
+    .map((end) => ({ year: fiscalYear(end), end, eps: epsByEnd.has(end) ? +epsByEnd.get(end).toFixed(4) : null, dividend: annualDividend(end), ...(statements.annual.get(end) || {}) }));
+  return { eps, dividends, annual, splits, paysDividends: dividendFacts.length > 0, ttm: statements.ttm, balance: statements.balance, sharesOutstanding: statements.sharesOutstanding };
 }
 
 function combine({ symbol, name, sector, prices, fundamentals, fetchedAt = new Date().toISOString() }) {
   const monthly = monthlyPrices(prices);
   if (monthly.length < 2) throw new ProviderError(`Not enough price history was found for ${symbol}. Check the ticker.`, 404);
-  const { eps, dividends, annual, splits, paysDividends } = fundamentals;
+  const { eps, dividends, annual, splits, paysDividends, ttm, balance, sharesOutstanding } = fundamentals;
   const rows = monthly.map((row) => {
     const ttmEps = valueAt(eps, row.date);
     const ttmDividend = paysDividends ? valueAt(dividends, row.date) : 0;
     return { date: row.date, price: row.price, eps: ttmEps == null ? null : +ttmEps.toFixed(4), dividend: ttmDividend == null ? 0 : +Math.max(0, ttmDividend).toFixed(4) };
   });
   if (!rows.some((row) => row.eps != null)) throw new ProviderError(`SEC earnings history for ${symbol} does not overlap the available price history.`, 422);
-  const first = rows[0].date;
   const splitNote = splits.length ? ` Detected splits: ${splits.map((split) => `${split.ratio >= 1 ? `${+split.ratio.toFixed(2)}-for-1` : `1-for-${+(1 / split.ratio).toFixed(2)}`} (by ${split.date})`).join(', ')}.` : '';
   return {
     ticker: symbol,
@@ -207,7 +319,10 @@ function combine({ symbol, name, sector, prices, fundamentals, fetchedAt = new D
     currency: 'USD',
     hasFundamentals: true,
     rows,
-    annual: annual.filter((item) => item.end >= first),
+    annual,
+    ttm: ttm || null,
+    balance: balance || null,
+    sharesOutstanding: sharesOutstanding || null,
     splits,
     fetchedAt,
     methodologyNote: `Month-end closing prices (split-adjusted) from FinancialData.net. Trailing diluted EPS and dividends per share from SEC 10-K/10-Q filings, restated to today's share basis and interpolated between quarter ends.${splitNote}`
@@ -228,11 +343,11 @@ async function fetchJson(url, options, label) {
 
 // Pages newest-first. With previously fetched history, stops at the first page that overlaps it,
 // so a refresh usually costs one request instead of the full ~10.
-async function fetchPrices(symbol, key, fetchImpl, known = [], onRequest = () => {}) {
+async function fetchPrices(symbol, key, fetchImpl, known = [], onRequest = () => {}, maxPages = MAX_PAGES) {
   const knownByDate = new Map(known.filter((row) => validDate(row.date)).map((row) => [row.date, row]));
   const newestKnown = [...knownByDate.keys()].sort().at(-1);
   const records = [];
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < maxPages; page++) {
     const url = new URL(PRICE_BASE);
     url.searchParams.set('identifier', symbol);
     url.searchParams.set('offset', String(page * PAGE_SIZE));
@@ -246,7 +361,7 @@ async function fetchPrices(symbol, key, fetchImpl, known = [], onRequest = () =>
     if (newestKnown && batch.some((row) => validDate(row.date) && row.date <= newestKnown)) {
       // A split since the last fetch restates all history; the stored copy is then on the old share basis.
       const restated = batch.some((row) => { const old = knownByDate.get(row.date); return old && Math.abs(finiteNumber(row.close) / finiteNumber(old.close) - 1) > 0.01; });
-      if (restated) return fetchPrices(symbol, key, fetchImpl, [], onRequest);
+      if (restated) return fetchPrices(symbol, key, fetchImpl, [], onRequest, maxPages);
       break;
     }
   }
@@ -265,7 +380,25 @@ async function lookupCik(symbol, options) {
   return tickerCache.map.get(symbol.replace(/\./g, '-')) || null;
 }
 
-async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPrices = [], onRequest, onPrices } = {}) {
+// All observations of a FRED series via its keyless CSV download (missing values are ".").
+async function fetchFredSeries(series, { fetchImpl = fetch, userAgent } = {}) {
+  let response;
+  try { response = await fetchImpl(`${FRED_CSV}${encodeURIComponent(series)}`, { headers: { 'User-Agent': userAgent || 'Lettuce investment research (nathanielmann.ca)' }, signal: AbortSignal.timeout(20000) }); }
+  catch { throw new ProviderError('Could not reach FRED. Try again shortly.'); }
+  if (!response.ok) throw new ProviderError(`FRED returned HTTP ${response.status}.`);
+  const observations = (await response.text()).trim().split(/\r?\n/).slice(1)
+    .map((line) => { const [date, value] = line.split(','); return { date, value: finiteNumber(value) }; })
+    .filter((item) => validDate(item.date) && item.value != null);
+  if (!observations.length) throw new ProviderError(`FRED returned no observations for ${series}.`, 422);
+  return observations;
+}
+
+async function fetchFredLatest(series, options) {
+  const observations = await fetchFredSeries(series, options);
+  return { series, ...observations.at(-1) };
+}
+
+async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPrices = [], onRequest, onPrices, maxPages = MAX_PAGES } = {}) {
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) throw new ProviderError('Invalid ticker.', 400);
   if (!key) throw new ProviderError('Set FINANCIALDATA_API_KEY on the server.', 503);
   const sec = { fetchImpl, headers: { 'User-Agent': userAgent || 'Lettuce investment research (nathanielmann.ca)', Accept: 'application/json' } };
@@ -275,7 +408,7 @@ async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPr
   const [facts, submissions, prices] = await Promise.all([
     fetchJson(`${SEC_FACTS}CIK${cik}.json`, sec, 'SEC EDGAR'),
     fetchJson(`${SEC_SUBMISSIONS}CIK${cik}.json`, sec, 'SEC EDGAR').catch(() => null),
-    fetchPrices(symbol, key, fetchImpl, knownPrices, onRequest)
+    fetchPrices(symbol, key, fetchImpl, knownPrices, onRequest, maxPages)
   ]);
   if (onPrices && prices.length) onPrices(prices);
   if (!facts?.facts?.['us-gaap']) throw new ProviderError(`SEC filings for ${symbol} do not include U.S. GAAP financial data.`, 422);
@@ -286,8 +419,8 @@ async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPr
     name: /[a-z]/.test(filedName) ? filedName : filedName.toLowerCase().replace(/\b[a-z]/g, (letter) => letter.toUpperCase()),
     sector: submissions?.sicDescription,
     prices,
-    fundamentals: buildFundamentals(facts.facts['us-gaap'])
+    fundamentals: buildFundamentals(facts.facts['us-gaap'], facts.facts.dei)
   });
 }
 
-module.exports = { ProviderError, MAX_PAGES, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, valueAt, buildFundamentals, combine, fetchPrices, fetchCompany };
+module.exports = { ProviderError, MAX_PAGES, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, latestTtm, valueAt, buildFundamentals, combine, fetchPrices, fetchFredSeries, fetchFredLatest, fetchCompany };

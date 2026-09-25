@@ -31,7 +31,29 @@ Lettuce combines two sources on the server:
 | Data | Source | Notes |
 | --- | --- | --- |
 | Daily closing prices (split-adjusted) | [FinancialData.net](https://financialdata.net) free plan | Requires an API key. History starts in 2015. 300 requests per day. Each new ticker uses about 10. |
-| Diluted EPS, dividends per share, company name and industry | [SEC EDGAR](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) XBRL API | Free, no key. Covers U.S. companies that file 10-K/10-Q reports. |
+| Diluted EPS, dividends, revenue, margins, cash flow, debt, cash, equity, share counts, company name and industry | [SEC EDGAR](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) XBRL company facts | Free, no key. Covers U.S. companies that file 10-K/10-Q reports. |
+| 10-year Treasury yield (risk-free rate) and S&P 500 month-end values (for beta only) | [FRED](https://fred.stlouisfed.org) CSV downloads (`DGS10`, `SP500`) | Free, no key. Refreshed daily. |
+
+Following `free_stock_dashboard_data_sources.md`, the server stores **raw** statement values, and every ratio is calculated in `math.js`. Keyless sources are used wherever possible. Alpha Vantage, Finnhub and FMP are not used. SEC filings cover everything they would have supplied except analyst estimates, which have no free source. Peers are entered by hand, since automatic peer lists need a keyed API.
+
+### Fundamentals page
+
+- **Growth:** 5- and 10-year CAGR of revenue and diluted EPS; 5-year CAGR of FCF per share, dividends and diluted share count.
+- **Profitability:** gross, operating and FCF margins; ROIC = operating income × (1 − effective tax rate) ÷ average (debt + equity − cash).
+- **Balance sheet:** cash plus short-term investments, debt (borrowings plus commercial paper, excluding leases), net debt, and debt ÷ TTM FCF.
+- **Valuation:**
+  - market cap = price × cover-page shares outstanding (diluted shares for multi-class filers)
+  - EV = market cap + debt − cash
+  - trailing P/E, P/FCF, FCF yield, EV/EBIT and EV/EBITDA
+- **Cost of capital:**
+  - CAPM cost of equity = 10-year Treasury + Blume-adjusted beta × equity risk premium (5% default, editable). Beta uses 60 months against the S&P 500.
+  - Pre-tax cost of debt = interest expense ÷ average debt. If interest isn't reported, it's the 10-year Treasury + 1.5%.
+  - WACC, and ROIC − WACC.
+- **DCF:** two-stage free cash flow per share. Five years at the chosen growth rate, five years fading to terminal growth, then a Gordon terminal value, discounted at WACC. All inputs are editable.
+- **Financial history:** ten fiscal years of the raw and derived values.
+- **Peers:** the same metrics for tickers you add. Each new peer costs one price request, because only the latest price is needed.
+
+Trailing-twelve-month flows are last fiscal year + this year-to-date − the same year-to-date a year earlier.
 
 Setup:
 
@@ -41,7 +63,7 @@ Setup:
 
 Keys stay on the server and are never sent to the browser. Company results are cached in server memory for 24 hours.
 
-The server budgets 280 FinancialData.net requests a day, leaving headroom under the free plan's 300. It also allows 6 lookups per visitor per hour. A new ticker costs about 10 requests. After that, the server keeps its daily price history in memory, so a refresh fetches only the newest page (1 request). If a split has restated the history, it refetches everything. When the budget runs out, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down, so the first load after that is a full fetch again.
+The server budgets 280 FinancialData.net requests a day, leaving headroom under the free plan's 300. Each visitor may spend 60 requests per hour. A new ticker costs about 10 requests. After that, the server keeps its daily price history in memory, so a refresh fetches only the newest page (1 request). If a split has restated the history, it refetches everything. When the budget runs out, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down, so the first load after that is a full fetch again.
 
 ## Password
 

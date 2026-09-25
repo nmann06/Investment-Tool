@@ -47,7 +47,8 @@
   // Real tickers are kept for a week so holdings and the last research session survive a reload.
   const apiCache = readStore('lattice.api.v1', {});
   for (const [ticker, company] of Object.entries(apiCache)) {
-    if (company && Array.isArray(company.rows) && company.hasFundamentals && Date.now() - Date.parse(company.fetchedAt) < API_CACHE_MS) companies[ticker] = company;
+    // Entries saved before statement data was added (no `ttm`) are refetched.
+    if (company && Array.isArray(company.rows) && company.hasFundamentals && 'ttm' in company && Date.now() - Date.parse(company.fetchedAt) < API_CACHE_MS) companies[ticker] = company;
     else delete apiCache[ticker];
   }
   saveStore('lattice.api.v1', apiCache);
@@ -62,13 +63,15 @@
 
   function setText(id, value) { $(id).textContent = value; }
   function showView(next) {
-    view = ['research', 'portfolio', 'methodology'].includes(next) ? next : 'research';
-    for (const item of ['research', 'portfolio', 'methodology']) $(`${item}-view`).hidden = item !== view;
+    const views = ['research', 'fundamentals', 'portfolio', 'methodology'];
+    view = views.includes(next) ? next : 'research';
+    for (const item of views) $(`${item}-view`).hidden = item !== view;
     document.querySelectorAll('.nav-link').forEach((link) => link.classList.toggle('active', link.dataset.view === view));
     setText('breadcrumb-current', view.toUpperCase());
     if (location.hash !== `#${view}`) history.replaceState(null, '', `#${view}`);
     if (view === 'portfolio') renderPortfolio();
     if (view === 'research' && currentResult) renderChart(currentResult);
+    if (view === 'fundamentals') renderFundamentals();
   }
 
   function renderChips(query = '') {
@@ -84,9 +87,12 @@
     saveStore('lattice.selected.v1', ticker);
     manualExitPe = false;
     $('exit-pe-input').value = '';
+    $('dcf-growth').value = '';
+    $('dcf-discount').value = '';
     $('ticker-search').value = '';
     renderChips();
     renderResearch();
+    if (view === 'fundamentals') renderFundamentals();
   }
 
   function apiMessage(message, kind = '') {
@@ -299,6 +305,162 @@
     table.parentElement.scrollLeft = table.parentElement.scrollWidth;
   }
 
+  const compactMoney = (value) => {
+    if (value == null || !Number.isFinite(value)) return '—';
+    const size = Math.abs(value);
+    const [divisor, suffix] = size >= 1e12 ? [1e12, 'T'] : size >= 1e9 ? [1e9, 'B'] : size >= 1e6 ? [1e6, 'M'] : [1, ''];
+    return `${value < 0 ? '−' : ''}$${(size / divisor).toFixed(size / divisor >= 100 || !suffix ? 0 : 1)}${suffix}`;
+  };
+  const compactNumber = (value) => value == null || !Number.isFinite(value) ? '—' : value >= 1e9 ? `${(value / 1e9).toFixed(2)}B` : `${(value / 1e6).toFixed(0)}M`;
+  const multiple = (value) => value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1)}×`;
+  const inputRate = (id) => { const text = $(id).value.trim(); const value = Number(text) / 100; return text === '' || !Number.isFinite(value) ? undefined : value; };
+  const statRows = (items) => items.map(([label, value, hint]) => `<div><span>${label}${hint ? `<small>${hint}</small>` : ''}</span><strong>${value}</strong></div>`).join('');
+
+  let market = null;
+  let marketRequest = null;
+  // Treasury yield (FRED) and SPY history for beta, loaded once per session.
+  function ensureMarket() {
+    if (market || marketRequest) return;
+    marketRequest = fetch('/api/market').then((response) => response.ok ? response.json() : null).catch(() => null).then((data) => { market = data || { riskFree: null, benchmark: null }; if (view === 'fundamentals') renderFundamentals(); });
+  }
+
+  const hasStatements = (company) => Array.isArray(company?.annual) && company.annual.some((year) => Number.isFinite(year.revenue));
+  const fundamentalsFor = (company, withInputs) => M.fundamentals(company, withInputs ? {
+    benchmarkRows: market?.benchmark?.rows, riskFree: market?.riskFree?.rate, equityPremium: inputRate('erp-input'),
+    dcfGrowth: inputRate('dcf-growth'), terminalGrowth: inputRate('dcf-terminal'), discount: inputRate('dcf-discount')
+  } : {});
+
+  function renderFundamentals() {
+    const company = companies[selectedTicker];
+    setText('fund-avatar', company.name.charAt(0).toUpperCase());
+    setText('fund-name', company.name);
+    setText('fund-ticker', company.ticker);
+    const F = hasStatements(company) ? fundamentalsFor(company, true) : null;
+    $('fund-empty').hidden = Boolean(F);
+    $('fund-content').hidden = !F;
+    if (!F) { setText('fund-meta', `${company.sector || 'Unclassified'} · no statement data`); return; }
+    ensureMarket();
+    setText('fund-meta', `${company.sector || 'Unclassified'} · latest fiscal year ${F.latestYear.year} · trailing twelve months to ${F.ttmEnd}`);
+    const g = F.growth, p = F.profitability, b = F.balance, v = F.valuation, c = F.capital;
+    $('fund-growth').innerHTML = statRows([
+      ['Revenue CAGR', `${percent(g.revenue5)} · ${percent(g.revenue10)}`, '5 yr · 10 yr'],
+      ['Diluted EPS CAGR', `${percent(g.eps5)} · ${percent(g.eps10)}`, '5 yr · 10 yr'],
+      ['FCF per share CAGR', percent(g.fcfPerShare5), '5 yr'],
+      ['Dividend growth', percent(g.dividend5), '5 yr'],
+      ['Share count change', percent(g.shares5), '5 yr, per year; negative = buybacks']
+    ]);
+    $('fund-profit').innerHTML = statRows([
+      ['Gross margin', plainPercent(p.grossMargin), `FY${F.latestYear.year}`],
+      ['Operating margin', plainPercent(p.operatingMargin), `TTM ${plainPercent(p.ttmOperatingMargin)}`],
+      ['FCF margin', plainPercent(p.fcfMargin), `TTM ${plainPercent(p.ttmFcfMargin)}`],
+      ['Return on invested capital', plainPercent(p.roic), `FY${F.latestYear.year}, after tax`]
+    ]);
+    $('fund-balance').innerHTML = statRows([
+      ['Cash & short-term investments', compactMoney(b.cash), `as of ${b.end}`],
+      ['Total debt', compactMoney(b.debt), 'borrowings, excluding leases'],
+      [b.netDebt > 0 ? 'Net debt' : 'Net cash', compactMoney(Math.abs(b.netDebt)), 'debt − cash'],
+      ['Debt / free cash flow', b.debtToFcf == null ? '—' : `${number(b.debtToFcf, 1)} yrs`, 'years of TTM FCF to repay']
+    ]);
+    $('fund-valuation').innerHTML = statRows([
+      ['Market cap', compactMoney(v.marketCap), `${compactNumber(F.shares)} shares × ${money(F.price)}`],
+      ['Enterprise value', compactMoney(v.ev), 'market cap + debt − cash'],
+      ['P/E · P/FCF', `${multiple(v.pe)} · ${multiple(v.pfcf)}`, 'trailing twelve months'],
+      ['FCF yield', plainPercent(v.fcfYield), `TTM FCF ${compactMoney(v.ttmFcf)}`],
+      ['EV/EBIT · EV/EBITDA', `${multiple(v.evEbit)} · ${multiple(v.evEbitda)}`, 'trailing twelve months']
+    ]);
+    const betaText = c.beta ? `${number(c.betaUsed, 2)}` : market ? '1.00' : '…';
+    $('fund-capital').innerHTML = statRows([
+      ['Risk-free rate', c.riskFree == null ? (market ? 'Unavailable' : '…') : plainPercent(c.riskFree, 2), market?.riskFree ? `10-yr Treasury, FRED, ${market.riskFree.date}` : '10-yr Treasury, FRED'],
+      ['Beta', betaText, c.beta ? `${c.beta.months} months vs S&P 500, raw ${number(c.beta.raw, 2)}` : market ? 'market history unavailable; using 1.0' : 'loading'],
+      ['Cost of equity', plainPercent(c.costEquity), 'risk-free + beta × premium'],
+      ['Cost of debt (pre-tax)', plainPercent(c.costDebt), c.costDebtEstimated ? 'interest not reported; risk-free + 1.5%' : 'interest expense ÷ average debt'],
+      ['WACC', plainPercent(c.wacc), c.equityWeight == null ? '' : `${plainPercent(c.equityWeight, 0)} equity · tax ${plainPercent(c.taxRate, 0)}`],
+      ['ROIC − WACC', `<span class="${c.roicSpread == null ? '' : c.roicSpread >= 0 ? 'positive' : 'negative'}">${percent(c.roicSpread)}</span>`, c.roicSpread == null ? '' : c.roicSpread >= 0 ? 'creating value' : 'earning less than its cost of capital']
+    ]);
+    $('dcf-growth').placeholder = number(F.dcf.defaultGrowth * 100, 1);
+    $('dcf-discount').placeholder = c.wacc == null ? '9.0' : number(c.wacc * 100, 2);
+    const dcf = F.dcf.result;
+    setText('dcf-value', dcf ? money(dcf.value) : '—');
+    setText('dcf-safety', F.dcf.marginOfSafety == null ? '—' : `${plainPercent(Math.abs(F.dcf.marginOfSafety))} ${F.dcf.marginOfSafety >= 0 ? 'below' : 'above'}`);
+    $('dcf-safety').className = F.dcf.marginOfSafety == null ? '' : F.dcf.marginOfSafety >= 0 ? 'positive' : 'negative';
+    setText('dcf-detail', dcf
+      ? `Starting FCF/share ${money(F.dcf.fcfPerShare)} (TTM). Growth ${plainPercent(F.dcf.growth)} → terminal ${plainPercent(F.dcf.terminalGrowth)}, discounted at ${plainPercent(F.dcf.discount, 2)}. Terminal value is ${plainPercent(dcf.terminalShare, 0)} of the total. The price is ${money(F.price)}.`
+      : F.dcf.fcfPerShare > 0 ? 'The discount rate must exceed terminal growth by at least 0.5%.' : 'Free cash flow is negative or missing, so a cash-flow valuation is not meaningful.');
+    renderFundamentalTable(F);
+    renderPeers(F);
+  }
+
+  function renderFundamentalTable(F) {
+    const years = F.years.filter((year) => Number.isFinite(year.revenue)).slice(-10);
+    const row = (label, render) => `<tr><td>${label}</td>${years.map((year) => `<td>${render(year)}</td>`).join('')}</tr>`;
+    $('fund-table').innerHTML = `<thead><tr><th>FISCAL YEAR</th>${years.map((year) => `<th title="Period ending ${escapeHtml(year.end)}">${year.year}</th>`).join('')}</tr></thead><tbody>${[
+      row('Revenue', (y) => compactMoney(y.revenue)),
+      row('Gross margin', (y) => plainPercent(y.grossMargin)),
+      row('Operating margin', (y) => plainPercent(y.operatingMargin)),
+      row('Net income', (y) => compactMoney(y.netIncome)),
+      row('Operating cash flow', (y) => compactMoney(y.operatingCashFlow)),
+      row('Capital expenditures', (y) => compactMoney(y.capex)),
+      row('Free cash flow', (y) => compactMoney(y.fcf)),
+      row('FCF margin', (y) => plainPercent(y.fcfMargin)),
+      row('FCF / share', (y) => money(y.fcfPerShare)),
+      row('Diluted EPS', (y) => y.eps == null ? '—' : money(y.eps)),
+      row('Dividends / share', (y) => y.dividend == null ? '—' : money(y.dividend)),
+      row('Diluted shares', (y) => compactNumber(y.dilutedShares)),
+      row('Cash & ST investments', (y) => compactMoney(y.cash)),
+      row('Total debt', (y) => compactMoney(y.debt)),
+      row('Net debt (cash)', (y) => compactMoney(y.netDebt)),
+      row('ROIC', (y) => plainPercent(y.roic))
+    ].join('')}</tbody>`;
+    $('fund-table').parentElement.scrollLeft = $('fund-table').parentElement.scrollWidth;
+  }
+
+  const peerLists = readStore('lattice.peers.v1', {});
+  const peerData = readStore('lattice.peerdata.v1', {});
+  for (const [ticker, company] of Object.entries(peerData)) if (!company?.fetchedAt || Date.now() - Date.parse(company.fetchedAt) > API_CACHE_MS || !('ttm' in company)) delete peerData[ticker];
+  const peerCompany = (ticker) => companies[ticker]?.source === 'api' ? companies[ticker] : peerData[ticker];
+  function peerMessage(message, kind = '') { $('peer-message').textContent = message; $('peer-message').className = `api-message peer-message ${kind}`; }
+
+  function renderPeers(F) {
+    const peers = peerLists[selectedTicker] || [];
+    const line = (company, metrics, self) => {
+      const v = metrics?.valuation, p = metrics?.profitability, g = metrics?.growth;
+      return `<tr class="${self ? 'self' : ''}"><td>${escapeHtml(company?.name || '')} <span class="ticker-tag">${escapeHtml(company?.ticker || '')}</span></td><td>${money(metrics?.price)}</td><td>${compactMoney(v?.marketCap)}</td><td>${multiple(v?.pe)}</td><td>${multiple(v?.pfcf)}</td><td>${multiple(v?.evEbit)}</td><td>${plainPercent(v?.fcfYield)}</td><td>${plainPercent(p?.grossMargin)}</td><td>${plainPercent(p?.operatingMargin)}</td><td>${percent(g?.revenue5)}</td><td>${plainPercent(p?.roic)}</td><td>${self ? '' : `<button data-remove-peer="${escapeHtml(company.ticker)}" aria-label="Remove ${escapeHtml(company.ticker)}">Remove</button>`}</td></tr>`;
+    };
+    const rows = peers.map((ticker) => {
+      const company = peerCompany(ticker);
+      if (!company) return `<tr><td>${escapeHtml(ticker)}</td><td colspan="10">Loading…</td><td><button data-remove-peer="${escapeHtml(ticker)}">Remove</button></td></tr>`;
+      return line(company, hasStatements(company) ? fundamentalsFor(company, false) : null, false);
+    });
+    $('peer-table').innerHTML = `<thead><tr><th>COMPANY</th><th>PRICE</th><th>MARKET CAP</th><th>P/E</th><th>P/FCF</th><th>EV/EBIT</th><th>FCF YIELD</th><th>GROSS MARGIN</th><th>OP. MARGIN</th><th>REV. CAGR 5Y</th><th>ROIC</th><th></th></tr></thead><tbody>${line(companies[selectedTicker], F, true)}${rows.join('')}</tbody>`;
+  }
+
+  async function addPeers() {
+    const tickers = [...new Set($('peer-input').value.toUpperCase().split(/[\s,]+/).filter((item) => /^[A-Z0-9.\-]{1,12}$/.test(item) && item !== selectedTicker))];
+    if (!tickers.length) { peerMessage('Enter one or more tickers, separated by commas.', 'error'); return; }
+    const list = peerLists[selectedTicker] || [];
+    peerLists[selectedTicker] = [...list, ...tickers.filter((ticker) => !list.includes(ticker))].slice(0, 12);
+    saveStore('lattice.peers.v1', peerLists);
+    $('peer-input').value = '';
+    renderFundamentals();
+    const failed = [];
+    for (const ticker of tickers) {
+      if (peerCompany(ticker)) continue;
+      try {
+        const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=peer`);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw Error(result.error || 'Could not load.');
+        peerData[ticker] = result;
+        saveStore('lattice.peerdata.v1', peerData);
+      } catch (error) {
+        failed.push(`${ticker}: ${error.message}`);
+        peerLists[selectedTicker] = peerLists[selectedTicker].filter((item) => item !== ticker);
+        saveStore('lattice.peers.v1', peerLists);
+      }
+      if (view === 'fundamentals') renderFundamentals();
+    }
+    peerMessage(failed.join(' '), failed.length ? 'error' : '');
+  }
+
   function renderPortfolio() {
     const active = holdings.filter((item) => companies[item.ticker] && item.shares > 0);
     const missing = holdings.filter((item) => !companies[item.ticker] && item.shares > 0);
@@ -338,6 +500,10 @@
   $('window-options').addEventListener('click', (event) => { const button = event.target.closest('[data-years]'); if (!button) return; selectedYears = Number(button.dataset.years); $('window-options').querySelectorAll('button').forEach((item) => item.classList.toggle('selected', item === button)); renderResearch(); });
   $('multiple-options').addEventListener('click', (event) => { const button = event.target.closest('[data-multiple]'); if (!button) return; multipleMode = button.dataset.multiple; $('multiple-options').querySelectorAll('button').forEach((item) => item.classList.toggle('selected', item === button)); renderResearch(); });
   $('scenario-toggle').addEventListener('change', renderResearch);
+  for (const id of ['erp-input', 'dcf-growth', 'dcf-terminal', 'dcf-discount']) $(id).addEventListener('input', renderFundamentals);
+  $('peer-add').addEventListener('click', addPeers);
+  $('peer-input').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addPeers(); } });
+  $('peer-table').addEventListener('click', (event) => { const button = event.target.closest('[data-remove-peer]'); if (!button) return; peerLists[selectedTicker] = (peerLists[selectedTicker] || []).filter((ticker) => ticker !== button.dataset.removePeer); saveStore('lattice.peers.v1', peerLists); renderFundamentals(); });
   $('growth-input').addEventListener('input', renderResearch);
   $('exit-pe-input').addEventListener('input', () => { manualExitPe = $('exit-pe-input').value !== ''; renderResearch(); });
   $('import-open').addEventListener('click', openImport);

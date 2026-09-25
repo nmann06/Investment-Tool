@@ -91,5 +91,140 @@
     }).filter((item) => item.high != null);
   }
 
-  return { GRAHAM_PE, median, yearsBetween, cagr, calculate, annualSummary };
+  const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+  const ratio = (top, bottom) => finite(top) && finite(bottom) && bottom !== 0 ? top / bottom : null;
+  const positiveRatio = (top, bottom) => finite(top) && finite(bottom) && bottom > 0 ? top / bottom : null;
+  const DEFAULT_TAX = 0.21;
+
+  function taxRate(year) {
+    return year && year.pretaxIncome > 0 && finite(year.incomeTax) ? clamp(year.incomeTax / year.pretaxIncome, 0, 0.35) : DEFAULT_TAX;
+  }
+
+  // Adds derived metrics to each fiscal year of raw statement values.
+  function yearMetrics(annual) {
+    const years = (annual || []).filter((item) => item && item.end).slice().sort((a, b) => a.end.localeCompare(b.end));
+    return years.map((year, index) => {
+      const fcf = finite(year.operatingCashFlow) && finite(year.capex) ? year.operatingCashFlow - year.capex : null;
+      const tax = taxRate(year);
+      const investedCapital = finite(year.equity) && finite(year.debt) ? year.equity + year.debt - (year.cash || 0) : null;
+      const previous = years[index - 1];
+      const previousCapital = previous && finite(previous.equity) && finite(previous.debt) ? previous.equity + previous.debt - (previous.cash || 0) : null;
+      const averageCapital = investedCapital != null && previousCapital != null ? (investedCapital + previousCapital) / 2 : investedCapital;
+      return {
+        ...year,
+        fcf,
+        fcfPerShare: positiveRatio(fcf, year.dilutedShares),
+        grossMargin: positiveRatio(year.grossProfit, year.revenue),
+        operatingMargin: positiveRatio(year.operatingIncome, year.revenue),
+        fcfMargin: positiveRatio(fcf, year.revenue),
+        netDebt: finite(year.debt) && finite(year.cash) ? year.debt - year.cash : null,
+        taxRate: tax,
+        roic: finite(year.operatingIncome) && averageCapital > 0 ? year.operatingIncome * (1 - tax) / averageCapital : null
+      };
+    });
+  }
+
+  // CAGR between the latest fiscal year and the fiscal year `years` earlier; both values must be positive.
+  function growthOver(years, field, span) {
+    const withValue = years.filter((year) => finite(year[field]) && year[field] > 0);
+    const last = withValue[withValue.length - 1];
+    const first = last && withValue.find((year) => year.year === last.year - span);
+    return last && first ? cagr(first[field], last[field], span) : null;
+  }
+
+  function monthlyReturns(rows) {
+    const byMonth = new Map((rows || []).filter((row) => finite(row.price) && row.price > 0).map((row) => [row.date.slice(0, 7), row.price]));
+    const months = [...byMonth.keys()].sort();
+    const returns = new Map();
+    for (let i = 1; i < months.length; i++) returns.set(months[i], byMonth.get(months[i]) / byMonth.get(months[i - 1]) - 1);
+    return returns;
+  }
+
+  // Beta from up to five years of monthly returns against a market proxy, with the Blume adjustment toward 1.
+  function beta(stockRows, marketRows, months = 60) {
+    const stock = monthlyReturns(stockRows), market = monthlyReturns(marketRows);
+    const pairs = [...stock.keys()].filter((month) => market.has(month)).sort().slice(-months).map((month) => [stock.get(month), market.get(month)]);
+    if (pairs.length < 24) return null;
+    const mean = (index) => pairs.reduce((sum, pair) => sum + pair[index], 0) / pairs.length;
+    const stockMean = mean(0), marketMean = mean(1);
+    const covariance = pairs.reduce((sum, [s, m]) => sum + (s - stockMean) * (m - marketMean), 0) / (pairs.length - 1);
+    const variance = pairs.reduce((sum, [, m]) => sum + (m - marketMean) ** 2, 0) / (pairs.length - 1);
+    if (!(variance > 0)) return null;
+    const raw = covariance / variance;
+    return { raw, adjusted: 0.67 * raw + 0.33, months: pairs.length };
+  }
+
+  // Two-stage DCF on free cash flow per share: five years at `growth`, five years fading to `terminalGrowth`, then a Gordon terminal value.
+  function discountedCashFlow({ fcfPerShare, growth, terminalGrowth, discount }) {
+    if (!(fcfPerShare > 0) || !finite(growth) || !finite(terminalGrowth) || !finite(discount) || discount <= terminalGrowth + 0.005) return null;
+    let cash = fcfPerShare, presentValue = 0;
+    for (let year = 1; year <= 10; year++) {
+      const rate = year <= 5 ? growth : growth + (terminalGrowth - growth) * (year - 5) / 5;
+      cash *= 1 + rate;
+      presentValue += cash / Math.pow(1 + discount, year);
+    }
+    const terminal = cash * (1 + terminalGrowth) / (discount - terminalGrowth);
+    const presentTerminal = terminal / Math.pow(1 + discount, 10);
+    const value = presentValue + presentTerminal;
+    return { value, presentValue, presentTerminal, terminalShare: presentTerminal / value };
+  }
+
+  function fundamentals(company, options = {}) {
+    const years = yearMetrics(company.annual);
+    if (!years.some((year) => finite(year.revenue))) return null;
+    const rows = (company.rows || []).filter((row) => finite(row.price));
+    const latestRow = rows[rows.length - 1];
+    const price = options.price ?? latestRow?.price;
+    const latestYear = [...years].reverse().find((year) => finite(year.revenue)) || years[years.length - 1];
+    const ttm = company.ttm || {};
+    const balance = company.balance || latestYear;
+    const shares = company.sharesOutstanding?.value || latestYear.dilutedShares;
+    const marketCap = finite(price) && shares > 0 ? price * shares : null;
+    const cash = balance.cash ?? latestYear.cash ?? 0;
+    const debt = balance.debt ?? latestYear.debt ?? 0;
+    const ttmFcf = finite(ttm.operatingCashFlow) && finite(ttm.capex) ? ttm.operatingCashFlow - ttm.capex : latestYear.fcf;
+    const ebit = ttm.operatingIncome ?? latestYear.operatingIncome;
+    const depreciation = ttm.depreciation ?? latestYear.depreciation;
+    const ev = marketCap != null ? marketCap + debt - cash : null;
+    const tax = taxRate(latestYear);
+
+    const riskFree = finite(options.riskFree) ? options.riskFree : null;
+    const erp = finite(options.equityPremium) ? options.equityPremium : 0.05;
+    const betaResult = options.benchmarkRows ? beta(rows, options.benchmarkRows) : null;
+    const betaValue = betaResult ? clamp(betaResult.adjusted, 0.3, 3) : 1;
+    const costEquity = riskFree != null ? riskFree + betaValue * erp : null;
+    const averageDebt = years.length > 1 && finite(years[years.length - 2].debt) && finite(latestYear.debt) ? (years[years.length - 2].debt + latestYear.debt) / 2 : latestYear.debt;
+    const impliedDebtCost = positiveRatio(latestYear.interestExpense, averageDebt);
+    const costDebt = riskFree == null ? null : impliedDebtCost != null ? clamp(impliedDebtCost, 0.01, 0.15) : riskFree + 0.015;
+    const equityWeight = marketCap != null ? marketCap / (marketCap + debt) : null;
+    const wacc = costEquity != null && equityWeight != null ? equityWeight * costEquity + (1 - equityWeight) * costDebt * (1 - tax) : null;
+
+    const growth = {
+      revenue5: growthOver(years, 'revenue', 5), revenue10: growthOver(years, 'revenue', 10),
+      eps5: growthOver(years, 'eps', 5), eps10: growthOver(years, 'eps', 10),
+      fcfPerShare5: growthOver(years, 'fcfPerShare', 5), dividend5: growthOver(years, 'dividend', 5),
+      shares5: growthOver(years, 'dilutedShares', 5)
+    };
+    const fcfPerShare = positiveRatio(ttmFcf, shares);
+    const defaultGrowth = clamp(growth.fcfPerShare5 ?? growth.revenue5 ?? 0.05, 0, 0.15);
+    const dcfInputs = { fcfPerShare, growth: options.dcfGrowth ?? defaultGrowth, terminalGrowth: options.terminalGrowth ?? 0.025, discount: options.discount ?? wacc ?? 0.09 };
+    const dcf = discountedCashFlow(dcfInputs);
+    const ttmEps = latestRow?.eps;
+
+    return {
+      years, latestYear, price, shares, sharesSource: company.sharesOutstanding?.source || 'Diluted weighted-average shares', ttmEnd: ttm.end || latestYear.end,
+      growth,
+      profitability: { grossMargin: latestYear.grossMargin, operatingMargin: latestYear.operatingMargin, fcfMargin: latestYear.fcfMargin, roic: latestYear.roic, ttmOperatingMargin: positiveRatio(ttm.operatingIncome, ttm.revenue), ttmFcfMargin: positiveRatio(ttmFcf, ttm.revenue) },
+      balance: { end: balance.end || latestYear.end, cash, debt, netDebt: debt - cash, debtToFcf: positiveRatio(debt, ttmFcf) },
+      valuation: {
+        marketCap, ev, ttmFcf, fcfPerShare,
+        pe: positiveRatio(price, ttmEps), pfcf: positiveRatio(marketCap, ttmFcf), fcfYield: ratio(ttmFcf, marketCap),
+        evEbit: positiveRatio(ev, ebit), evEbitda: finite(ebit) && finite(depreciation) ? positiveRatio(ev, ebit + depreciation) : null
+      },
+      capital: { riskFree, equityPremium: erp, beta: betaResult, betaUsed: betaValue, costEquity, costDebt, costDebtEstimated: impliedDebtCost == null, taxRate: tax, equityWeight, wacc, roicSpread: finite(latestYear.roic) && wacc != null ? latestYear.roic - wacc : null },
+      dcf: { ...dcfInputs, defaultGrowth, result: dcf, marginOfSafety: dcf && finite(price) ? 1 - price / dcf.value : null }
+    };
+  }
+
+  return { GRAHAM_PE, median, yearsBetween, cagr, calculate, annualSummary, yearMetrics, growthOver, beta, discountedCashFlow, fundamentals };
 });
