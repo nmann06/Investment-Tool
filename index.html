@@ -3,74 +3,67 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0c1424">
-  <title>Lattice — Investment research</title>
-  <link rel="stylesheet" href="styles.css">
+  <meta name="theme-color" content="#0d1726">
+  <meta name="description" content="Nathaniel Mann's investment research tool and project portfolio.">
+  <title>Nathaniel Mann — Investment research & projects</title>
+  <link rel="stylesheet" href="/site.css">
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <a class="brand" href="#research" aria-label="Lattice home"><span class="brand-mark">◈</span><span>lattice<span class="brand-dot">.</span></span></a>
-      <div class="workspace-label">WORKSPACE</div>
-      <nav aria-label="Main navigation">
-        <a href="#research" class="nav-link active" data-view="research"><span>◫</span> Research</a>
-        <a href="#portfolio" class="nav-link" data-view="portfolio"><span>▥</span> Portfolio <span id="holding-count" class="nav-count">0</span></a>
-        <a href="#methodology" class="nav-link" data-view="methodology"><span>◎</span> Methodology</a>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="identity" href="/" aria-label="Nathaniel Mann, home"><span class="identity-mark">NM<span>.</span></span><span class="identity-name">NATHANIEL MANN</span></a>
+      <nav class="site-nav" aria-label="Site navigation">
+        <a href="/" data-nav="home">Home</a>
+        <a href="/app" data-nav="tool">Investment Tool</a>
+        <a href="/about" data-nav="about">About Me</a>
+        <a href="/portfolio" data-nav="portfolio">Portfolio</a>
       </nav>
-      <div class="sidebar-bottom">
-        <div class="data-status"><span class="status-dot"></span> <span id="sidebar-data-status">Checking data connection</span></div>
-        <p id="sidebar-data-help">Explore the tool with synthetic examples, or import your own licensed data.</p>
+      <a class="header-cta" href="/app">Explore the tool <span aria-hidden="true">↗</span></a>
+    </header>
+
+    <main>
+      <div id="home-page" class="site-page">
+        <section class="hero">
+          <div class="hero-grain" aria-hidden="true"></div>
+          <div class="hero-copy">
+            <div class="section-label"><span class="label-line"></span> A PERSONAL PROJECT BY NATHANIEL MANN</div>
+            <h1>See the market<br>with <em>more clarity.</em></h1>
+            <p>A home for investment research and the projects behind it. Compare any U.S. company's stock price with its real earnings in an interactive tool built to make the numbers easier to understand.</p>
+            <div class="hero-actions"><a class="button-light" href="/app">Open investment tool <span aria-hidden="true">↗</span></a><a class="button-quiet" href="#explore">Explore this site <span aria-hidden="true">↓</span></a></div>
+            <div class="hero-bottom"><span class="pulse-dot"></span> BUILT FOR CURIOSITY, BACKED BY DATA</div>
+          </div>
+          <div class="hero-art" aria-label="Illustrative line chart preview">
+            <div class="art-top"><span class="art-kicker">LATTICE / RESEARCH</span><span class="art-sparkle" aria-hidden="true">✦</span></div>
+            <div class="art-title">A different view<br>of the numbers.</div>
+            <div class="art-chart" aria-hidden="true">
+              <div class="chart-tag">ILLUSTRATIVE PRICE TREND</div>
+              <svg viewBox="0 0 430 210" preserveAspectRatio="none"><g stroke="#ffffff1e" stroke-width="1"><line x1="0" y1="30" x2="430" y2="30"/><line x1="0" y1="80" x2="430" y2="80"/><line x1="0" y1="130" x2="430" y2="130"/><line x1="0" y1="180" x2="430" y2="180"/></g><path d="M0 176 C28 160 35 173 56 145 S96 151 119 130 S159 136 180 119 S218 136 240 95 S280 109 304 73 S344 88 367 53 S404 57 430 24" fill="none" stroke="#8ed9ba" stroke-width="3"/><path d="M0 176 C28 160 35 173 56 145 S96 151 119 130 S159 136 180 119 S218 136 240 95 S280 109 304 73 S344 88 367 53 S404 57 430 24 L430 210 L0 210Z" fill="url(#chart-fill)"/><defs><linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#8ed9ba" stop-opacity=".26"/><stop offset="1" stop-color="#8ed9ba" stop-opacity="0"/></linearGradient></defs><circle cx="430" cy="24" r="5" fill="#a8ecd0"/></svg>
+              <div class="chart-years"><span>EARLIER</span><span>RECENT</span></div>
+            </div>
+            <div class="art-foot"><span>Price vs. earnings</span><span>One chart. A clearer question.</span></div>
+          </div>
+        </section>
+
+        <section class="intro-strip" aria-label="Site introduction"><span>AN INDEPENDENT WEB PROJECT</span><span class="strip-rule"></span><span>FINANCE <b>×</b> DESIGN <b>×</b> CURIOSITY</span></section>
+
+        <section class="explore-section" id="explore">
+          <div class="section-header"><div><div class="section-label dark"><span class="label-line"></span> EXPLORE</div><h2>One place for <em>what I’m building.</em></h2></div><p>Start with the investment tool. The personal pages are ready to grow as new work is added.</p></div>
+          <div class="explore-grid">
+            <a class="explore-card featured" href="/app"><span class="card-index">01 / FEATURED PROJECT</span><div class="card-icon">◈</div><h3>Investment Tool</h3><p>Chart price against earnings and dividends from SEC filings, spot when a stock looks cheap or expensive, and test a five-year scenario.</p><span class="card-link">Open the tool <span aria-hidden="true">↗</span></span></a>
+            <a class="explore-card" href="/about"><span class="card-index">02 / PERSONAL</span><div class="card-icon">◎</div><h3>About Me</h3><p>A space for my background and interests.</p><span class="card-link">View page <span aria-hidden="true">↗</span></span></a>
+            <a class="explore-card" href="/portfolio"><span class="card-index">03 / WORK</span><div class="card-icon">▤</div><h3>Portfolio</h3><p>A place for projects and things I’ve made.</p><span class="card-link">View page <span aria-hidden="true">↗</span></span></a>
+          </div>
+        </section>
+
+        <section class="closing-band"><div><span class="closing-kicker">LATTICE / INVESTMENT RESEARCH</span><h2>Good questions start<br>with a clearer picture.</h2></div><a href="/app" class="closing-link">Explore the tool <span aria-hidden="true">↗</span></a></section>
       </div>
-    </aside>
 
-    <main class="main-content">
-      <header class="topbar">
-        <div class="breadcrumb">WORKSPACE <span>/</span> <strong id="breadcrumb-current">RESEARCH</strong></div>
-        <div class="topbar-right"><span class="date-label" id="today-label"></span><button class="text-button" id="import-open">↥ &nbsp;Import CSV</button></div>
-      </header>
-
-      <section id="research-view" class="view">
-        <div class="page-heading">
-          <div><div class="eyebrow">FUNDAMENTALS & PRICE</div><h1>Find the story <em>behind</em> the price.</h1><p>See how market price compares with a company's own earnings history.</p></div>
-          <div class="demo-pill"><span class="status-dot"></span> <span id="source-badge">SYNTHETIC DEMO DATA</span></div>
-        </div>
-
-        <div class="ticker-bar">
-          <label class="search-box"><span class="search-icon">⌕</span><input id="ticker-search" type="search" placeholder="Search a company or ticker" autocomplete="off" aria-label="Search a company or ticker"><kbd>⌘ K</kbd></label>
-          <button class="primary-button" id="load-ticker" type="button">Load real ticker</button><div class="ticker-chips" id="ticker-chips"></div>
-        </div>
-        <div id="api-message" class="api-message" role="status" aria-live="polite"></div>
-
-        <div class="company-line"><div class="company-identity"><div class="company-avatar" id="company-avatar">N</div><div><div class="company-name-line"><h2 id="company-name">Northstar Systems</h2><span class="ticker-tag" id="company-ticker">NSTR</span></div><div class="company-meta" id="company-meta">Technology · Synthetic company</div></div></div><button class="outline-button" id="add-holding-open">+ Add holding</button></div>
-
-        <div class="metrics-grid">
-          <article class="metric-card"><div class="metric-label">LATEST PRICE <span>↗</span></div><div class="metric-value" id="metric-price">—</div><div class="metric-sub" id="metric-price-date">—</div></article>
-          <article class="metric-card"><div class="metric-label">CURRENT P/E <span>◇</span></div><div class="metric-value" id="metric-current-pe">—</div><div class="metric-sub">Price ÷ latest trailing EPS</div></article>
-          <article class="metric-card"><div class="metric-label">NORMAL P/E <span>◷</span></div><div class="metric-value" id="metric-normal-pe">—</div><div class="metric-sub" id="metric-observations">Historical median</div></article>
-          <article class="metric-card highlighted"><div class="metric-label">MARGIN OF SAFETY <span>◎</span></div><div class="metric-value" id="metric-safety">—</div><div class="metric-sub" id="metric-safety-detail">Relative to calculated fair value</div></article>
-        </div>
-
-        <div class="content-grid">
-          <section class="panel chart-panel"><div class="panel-header"><div><div class="panel-kicker">THE BIG PICTURE</div><h3>Price vs. earnings value</h3><p>Historical closing price and EPS-based valuation benchmark</p></div><div class="segmented" id="window-options" aria-label="Chart window"><button data-years="5">5Y</button><button data-years="10" class="selected">10Y</button><button data-years="15">15Y</button><button data-years="20">20Y</button></div></div>
-            <div class="chart-legend"><span><i class="legend-line price-line"></i> Price</span><span><i class="legend-line fair-line"></i> Fair value</span><span><i class="legend-line eps-line"></i> Trailing EPS <small>(right axis)</small></span></div>
-            <div class="chart-wrap"><svg id="valuation-chart" role="img" aria-label="Historical stock price, fair value, and trailing earnings chart" viewBox="0 0 900 360" preserveAspectRatio="none"></svg><div id="chart-tooltip" class="chart-tooltip" hidden></div></div>
-            <div class="chart-footnote" id="chart-footnote">Fair value uses the median observed P/E within the selected period. Prices and EPS must use the same share basis.</div>
-          </section>
-          <aside class="panel snapshot-panel"><div class="panel-kicker">VALUATION SNAPSHOT</div><h3>At a glance</h3><div class="valuation-meter"><div class="meter-track"><div class="meter-marker" id="meter-marker"></div></div><div class="meter-labels"><span>Below fair value</span><span>Above fair value</span></div></div><div class="snapshot-list"><div><span>Fair value / share</span><strong id="snapshot-fair">—</strong></div><div><span>Latest trailing EPS</span><strong id="snapshot-eps">—</strong></div><div><span>EPS growth / year</span><strong id="snapshot-growth">—</strong></div><div><span>Data points in range</span><strong id="snapshot-points">—</strong></div></div><div class="insight-box"><span class="insight-icon">✳</span><p id="insight-text">Select a company to explore its valuation history.</p></div></aside>
-        </div>
-
-        <section class="panel forecast-panel"><div class="forecast-intro"><div class="panel-kicker">SCENARIO BUILDER</div><h3>What could five years look like?</h3><p>Explore a simple price return scenario. Your assumptions are editable and are not forecasts.</p></div><div class="forecast-controls"><label>EPS growth / year <div class="input-suffix"><input id="growth-input" type="number" min="-50" max="100" step="0.5" value="8"><span>%</span></div></label><label>Exit P/E <div class="input-suffix"><input id="exit-pe-input" type="number" min="1" max="100" step="0.5"><span>×</span></div></label></div><div class="forecast-result"><span>IMPLIED ANNUAL PRICE RETURN</span><strong id="forecast-return">—</strong><small id="forecast-price">Projected price —</small></div></section>
-        <div class="disclaimer">Research aid only. Demo companies and prices are synthetic. API prices are end-of-month observations, not live quotes. Calculations omit dividends, taxes, fees, dilution and changes to accounting policy. This is not investment advice.</div>
-      </section>
-
-      <section id="portfolio-view" class="view" hidden><div class="page-heading"><div><div class="eyebrow">YOUR WORKSPACE</div><h1>Portfolio <em>overview.</em></h1><p>Track positions in this browser with the latest data you have loaded.</p></div><button class="primary-button" id="portfolio-add">+ Add holding</button></div><div class="portfolio-summary"><div class="metric-card"><div class="metric-label">MARKET VALUE</div><div class="metric-value" id="portfolio-value">—</div></div><div class="metric-card"><div class="metric-label">COST BASIS</div><div class="metric-value" id="portfolio-cost">—</div></div><div class="metric-card"><div class="metric-label">UNREALIZED GAIN / LOSS</div><div class="metric-value" id="portfolio-gain">—</div></div></div><div class="panel portfolio-panel"><div class="panel-header"><div><div class="panel-kicker">POSITIONS</div><h3>Your holdings</h3></div></div><div id="holdings-content"></div></div><div class="disclaimer">Holdings are saved only in this browser. Market values use each ticker's latest loaded price; reload API tickers after refreshing the page. Prices do not update automatically.</div></section>
-
-      <section id="methodology-view" class="view" hidden><div class="page-heading"><div><div class="eyebrow">OPEN METHODOLOGY</div><h1>Understand <em>the math.</em></h1><p>Every figure on this dashboard comes from a small set of explicit calculations.</p></div></div><div class="method-grid"><article class="panel method-card"><span class="method-number">01</span><h3>Normal P/E</h3><p>For each valid observation in the selected window, divide price by positive trailing twelve-month EPS. Exclude ratios below 2 or above 100, then take the median.</p><code>normal P/E = median(price ÷ TTM EPS)</code></article><article class="panel method-card"><span class="method-number">02</span><h3>Fair value</h3><p>Multiply each period's trailing EPS by the selected window's normal P/E. A period with zero or negative EPS has no fair-value point.</p><code>fair value = TTM EPS × normal P/E</code></article><article class="panel method-card"><span class="method-number">03</span><h3>Margin of safety</h3><p>Compare the latest price with the latest calculated fair value. Negative values mean the price is above the benchmark.</p><code>1 − latest price ÷ fair value</code></article><article class="panel method-card"><span class="method-number">04</span><h3>Growth & return</h3><p>EPS growth uses the first positive EPS and latest positive EPS in the window. The scenario compounds EPS for five years, applies the selected exit P/E, and annualizes price change.</p><code>(future price ÷ current price) ^ (1 ÷ 5) − 1</code></article></div><div class="panel data-guide"><div class="panel-kicker">BRING YOUR OWN DATA</div><h3>CSV import format</h3><p>Import dated observations with columns <code>date,price,eps</code> and optional <code>dividend</code>. Use ISO dates, split-adjusted price and trailing EPS on the same share basis. Imported data remains in this browser.</p><button class="outline-button" id="method-import">↥ Import CSV</button></div></section>
+      <section id="about-page" class="site-page placeholder-page" hidden><div class="section-label dark"><span class="label-line"></span> PERSONAL</div><h1>About Me<span class="period">.</span></h1><div class="placeholder-canvas" aria-label="About Me content will be added here"></div></section>
+      <section id="portfolio-page" class="site-page placeholder-page" hidden><div class="section-label dark"><span class="label-line"></span> WORK</div><h1>Portfolio<span class="period">.</span></h1><div class="placeholder-canvas" aria-label="Project portfolio content will be added here"></div></section>
     </main>
-  </div>
 
-  <dialog id="import-dialog" class="modal"><form method="dialog"><button class="modal-close" aria-label="Close">×</button></form><div class="modal-kicker">DATA IMPORT</div><h2>Load company history</h2><p>Upload a CSV containing monthly or daily observations. You are responsible for the data license and adjustment consistency.</p><div class="form-grid"><label>Ticker<input id="import-ticker" maxlength="12" placeholder="ACME"></label><label>Company name<input id="import-name" placeholder="Acme Holdings"></label><label>Sector<input id="import-sector" placeholder="Technology"></label><label class="full-width">CSV file<input id="import-file" type="file" accept=".csv,text/csv"></label></div><div class="modal-error" id="import-error" role="alert"></div><div class="modal-actions"><button class="outline-button" id="import-cancel" type="button">Cancel</button><button class="primary-button" id="import-submit" type="button">Import data</button></div></dialog>
-  <dialog id="holding-dialog" class="modal"><form method="dialog"><button class="modal-close" aria-label="Close">×</button></form><div class="modal-kicker">PORTFOLIO</div><h2>Add a holding</h2><p>Enter the number of shares you own and your average cost per share.</p><div class="form-grid"><label class="full-width">Company<select id="holding-ticker"></select></label><label>Shares<input id="holding-shares" type="number" min="0.000001" step="any" placeholder="25"></label><label>Average cost / share<input id="holding-cost" type="number" min="0" step="any" placeholder="120.00"></label></div><div class="modal-error" id="holding-error" role="alert"></div><div class="modal-actions"><button class="outline-button" id="holding-cancel" type="button">Cancel</button><button class="primary-button" id="holding-submit" type="button">Save holding</button></div></dialog>
-  <script src="math.js"></script><script src="app.js"></script>
+    <footer class="site-footer"><span>© <span id="footer-year"></span> Nathaniel Mann</span><span>Built with care and curiosity.</span><a href="/app">Investment Tool ↗</a></footer>
+  </div>
+  <script src="/site.js"></script>
 </body>
 </html>

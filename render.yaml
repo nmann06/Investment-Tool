@@ -9,7 +9,7 @@ services:
     domains:
       - nathanielmann.ca
     envVars:
-      - key: ALPHA_VANTAGE_API_KEY
+      - key: FINANCIALDATA_API_KEY
         sync: false
-      - key: APP_PASSWORD
+      - key: SEC_USER_AGENT
         sync: false

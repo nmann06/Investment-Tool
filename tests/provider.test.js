@@ -1,77 +1,81 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeCompany, fetchCompany, splitFactorAfter } = require('../provider');
+const { detectSplits, buildFundamentals, valueAt, combine, fetchCompany } = require('../provider.js');
 
-const monthly = { 'Monthly Adjusted Time Series': {
-  '2024-12-31': { '4. close': '100' },
-  '2025-01-31': { '4. close': '100' },
-  '2025-02-28': { '4. close': '55' },
-  '2025-03-31': { '4. close': '60' }
-} };
-const earnings = { quarterlyEarnings: [
-  { fiscalDateEnding: '2024-12-31', reportedDate: '2025-01-15', reportedEPS: '1' },
-  { fiscalDateEnding: '2024-09-30', reportedDate: '2024-10-15', reportedEPS: '1' },
-  { fiscalDateEnding: '2024-06-30', reportedDate: '2024-07-15', reportedEPS: '1' },
-  { fiscalDateEnding: '2024-03-31', reportedDate: '2024-04-15', reportedEPS: '1' }
-] };
-const splits = { data: [{ effective_date: '2025-02-15', split_factor: '2' }] };
-const overview = { Name: 'Example Corp', Sector: 'Technology', Currency: 'USD' };
+const fact = (start, end, val, filed, form = '10-Q') => ({ start, end, val, filed, form });
+const gaap = (eps, dividends = []) => ({
+  EarningsPerShareDiluted: { units: { 'USD/shares': eps } },
+  ...(dividends.length ? { CommonStockDividendsPerShareDeclared: { units: { 'USD/shares': dividends } } } : {})
+});
 
-test('matches only published EPS and adjusts price and earnings for splits', () => {
-  const company = normalizeCompany('EXM', monthly, earnings, splits, overview);
-  assert.equal(company.name, 'Example Corp');
+// Four quarters of 2023 reported before a 4-for-1 split, then restated in 2024 filings.
+const splitHistory = [
+  fact('2023-01-01', '2023-03-31', 4.0, '2023-05-01'),
+  fact('2023-04-01', '2023-06-30', 4.4, '2023-08-01'),
+  fact('2023-07-01', '2023-09-30', 4.8, '2023-11-01'),
+  fact('2023-01-01', '2023-09-30', 13.2, '2023-11-01'),
+  fact('2023-01-01', '2023-12-31', 18.4, '2024-02-01', '10-K'),
+  fact('2024-01-01', '2024-03-31', 1.3, '2024-05-01'),
+  fact('2023-01-01', '2023-03-31', 1.0, '2024-05-01'),
+  fact('2024-04-01', '2024-06-30', 1.4, '2024-08-01'),
+  fact('2023-04-01', '2023-06-30', 1.1, '2024-08-01')
+];
+
+test('restated per-share figures reveal a split and its date', () => {
+  const facts = splitHistory.map((item) => ({ ...item, tag: 'EarningsPerShareDiluted', priority: 0 }));
+  const splits = detectSplits(facts);
+  assert.equal(splits.length, 1);
+  assert.equal(splits[0].ratio, 4);
+  assert.equal(splits[0].date, '2024-05-01');
+});
+
+test('a single ordinary restatement is not treated as a split', () => {
+  const facts = [fact('2023-01-01', '2023-12-31', 2.0, '2024-02-01', '10-K'), fact('2023-01-01', '2023-12-31', 1.0, '2025-02-01', '10-K')]
+    .map((item) => ({ ...item, tag: 'EarningsPerShareDiluted', priority: 0 }));
+  assert.deepEqual(detectSplits(facts), []);
+});
+
+test('fundamentals are restated to today\'s share basis with a derived fourth quarter', () => {
+  const result = buildFundamentals(gaap(splitHistory));
+  const fy = result.annual.find((item) => item.end === '2023-12-31');
+  assert.ok(Math.abs(fy.eps - 4.6) < 1e-9);
+  const ttm = new Map(result.eps.map((point) => [point.date, point.value]));
+  assert.ok(Math.abs(ttm.get('2023-12-31') - 4.6) < 1e-9);
+  // Q2-2023..Q1-2024: 1.1 + 1.2 + (4.6 - 3.3) + 1.3
+  assert.ok(Math.abs(ttm.get('2024-03-31') - 4.9) < 1e-9);
+  assert.ok(Math.abs(ttm.get('2024-06-30') - 5.2) < 1e-9);
+});
+
+test('TTM values interpolate between quarter ends and hold after the latest report', () => {
+  const series = [{ date: '2024-01-01', value: 1 }, { date: '2024-01-11', value: 2 }];
+  assert.equal(valueAt(series, '2023-12-31'), null);
+  assert.ok(Math.abs(valueAt(series, '2024-01-06') - 1.5) < 1e-9);
+  assert.equal(valueAt(series, '2025-01-01'), 2);
+});
+
+test('companies without dividend filings show zero dividends', () => {
+  const fundamentals = buildFundamentals(gaap(splitHistory));
+  const prices = [{ date: '2024-01-31', close: 100 }, { date: '2024-02-29', close: 110 }, { date: '2024-06-28', close: 120 }];
+  const company = combine({ symbol: 'TEST', name: 'Test Co', prices, fundamentals });
   assert.equal(company.rows.length, 3);
-  assert.equal(company.rows[0].date, '2025-01-31');
-  assert.equal(company.rows[0].price, 50);
-  assert.equal(company.rows[0].eps, 2);
-  assert.equal(company.rows[2].price, 60);
-  assert.equal(company.rows[2].eps, 2);
-  assert.equal(splitFactorAfter('2025-02-15', [{ date: '2025-02-15', factor: 2 }]), 1);
+  assert.ok(company.rows.every((row) => row.dividend === 0 && row.eps > 0));
+  assert.equal(company.hasFundamentals, true);
 });
 
-test('rejects missing split history rather than silently mixing share bases', () => {
-  assert.throws(() => normalizeCompany('EXM', monthly, earnings, {}, overview), /split history/);
-});
-
-test('does not sum nonconsecutive quarters into trailing earnings', () => {
-  const sparse = { quarterlyEarnings: [
-    ...earnings.quarterlyEarnings.filter((item) => item.fiscalDateEnding !== '2024-09-30'),
-    { fiscalDateEnding: '2023-12-31', reportedDate: '2024-01-15', reportedEPS: '1' }
-  ] };
-  assert.throws(() => normalizeCompany('EXM', monthly, sparse, splits, overview), /Not enough matched/);
-});
-
-test('does not call provider without a configured key', async () => {
-  await assert.rejects(fetchCompany('EXM', '', () => { throw Error('Called provider'); }), /ALPHA_VANTAGE_API_KEY/);
-});
-
-test('loads the four documented provider datasets and returns chart rows', async () => {
-  const fixtures = {
-    TIME_SERIES_MONTHLY_ADJUSTED: monthly,
-    EARNINGS: earnings,
-    SPLITS: splits,
-    OVERVIEW: overview
+test('fetchCompany joins SEC and price responses without exposing the key', async () => {
+  const calls = [];
+  const respond = (body) => ({ ok: true, status: 200, json: async () => body });
+  const fetchImpl = async (url) => {
+    const href = String(url);
+    calls.push(href);
+    if (href.includes('company_tickers')) return respond({ 0: { cik_str: 123, ticker: 'TEST', title: 'Test Co' } });
+    if (href.includes('companyfacts')) return respond({ facts: { 'us-gaap': gaap(splitHistory) } });
+    if (href.includes('submissions')) return respond({ name: 'Test Company Inc.', sicDescription: 'Software' });
+    return respond([{ date: '2024-06-28', close: 120 }, { date: '2024-05-31', close: 115 }]);
   };
-  const called = [];
-  const fetchMock = async (url) => {
-    called.push(url.searchParams.get('function'));
-    assert.equal(url.searchParams.get('symbol'), 'EXM');
-    assert.equal(url.searchParams.get('apikey'), 'test-key');
-    return { ok: true, json: async () => fixtures[url.searchParams.get('function')] };
-  };
-  const company = await fetchCompany('EXM', 'test-key', fetchMock);
-  assert.deepEqual(called.sort(), Object.keys(fixtures).sort());
-  assert.equal(company.rows.at(-1).price, 60);
-});
-
-test('explains an invalid Apple ticker without making more provider calls', async () => {
-  let calls = 0;
-  const fetchMock = async () => { calls++; return { ok: true, json: async () => ({ 'Error Message': 'Invalid API call.' }) }; };
-  await assert.rejects(fetchCompany('APPL', 'test-key', fetchMock), /Did you mean AAPL/);
-  assert.equal(calls, 1);
-});
-
-test('identifies the provider daily limit separately from ticker errors', async () => {
-  const fetchMock = async () => ({ ok: true, json: async () => ({ Information: 'Our standard API rate limit is 25 requests per day. Visit our premium plan.' }) });
-  await assert.rejects(fetchCompany('AAPL', 'test-key', fetchMock), /daily request limit/);
+  const company = await fetchCompany('TEST', 'secret', { fetchImpl });
+  assert.equal(company.name, 'Test Company Inc.');
+  assert.equal(company.sector, 'Software');
+  assert.ok(calls.some((href) => href.includes('CIK0000000123')));
+  assert.ok(!JSON.stringify(company).includes('secret'));
 });

@@ -1,10 +1,10 @@
 # Lattice
 
-An independent, browser-based fundamentals-versus-price research prototype. It compares historical share price with an EPS-based valuation benchmark, lets you explore five-year assumptions, and tracks manually entered holdings.
+An independent, browser-based fundamentals-versus-price research tool in the spirit of FAST Graphs. It charts a company's share price against its earnings, shades an earnings-justified value (15× EPS, or the company's own normal P/E), shows dividends paid out of those earnings, projects a five-year scenario, and tracks manually entered holdings.
 
 ## Run
 
-No packages or API keys are required. On Windows, double-click `start.cmd`. It uses an available Node.js runtime to start the local server. If Node.js is unavailable, it opens `index.html` directly instead.
+On Windows, double-click `start.cmd`. It uses an available Node.js runtime to start the local server. If Node.js is unavailable, it opens `index.html` directly instead.
 
 If Node.js is installed on your PATH, you can also run:
 
@@ -12,56 +12,66 @@ If Node.js is installed on your PATH, you can also run:
 node server.js
 ```
 
-Open `http://127.0.0.1:4173` while the server is running. You can always open `index.html` directly in a browser without Node.js. To run the calculation tests on this computer, double-click `test.cmd`; it uses Codex's bundled Node.js runtime when Node.js is not installed separately. The test window stays open so you can read the results.
+Open `http://127.0.0.1:4173` while the server is running, then choose **Investment Tool**. Link straight to a company with `http://127.0.0.1:4173/app?ticker=AAPL`. To run the tests, double-click `test.cmd` or run `npm test`.
 
-## Current features
+## Features
 
-- Responsive research dashboard with 5, 10, 15 and 20-year chart windows.
-- Median historical P/E, fair-value line, margin of safety, EPS CAGR and an editable five-year price scenario.
-- CSV import for a company and manual portfolio holdings, saved to that browser's local storage.
-- Four **synthetic** companies for exploring the interface. Their prices and earnings are generated examples, not securities or market data.
-- Optional Alpha Vantage integration for real monthly prices and reported earnings, served through a local API.
+- FAST Graphs-style chart: month-end price, an orange earnings area (trailing EPS × 15 or × normal P/E), a green dividend area, a normal-P/E line and an optional dashed five-year scenario.
+- 3, 5, 10-year and maximum chart windows.
+- Current P/E, normal (median) P/E, fair value, margin of safety, EPS growth, dividend yield, payout ratio and annualized return over the window.
+- Year-by-year table of diluted EPS, EPS change, dividends, payout ratio, price range and average P/E.
+- Editable five-year scenario (EPS growth and exit P/E) with implied price and total return.
+- Real U.S. companies loaded on demand, plus four **synthetic** demo companies and CSV import.
+- Holdings saved in the browser's local storage. Loaded tickers are cached in the browser for a week.
 
-## Connect real market data
+## Real market data
 
-1. Get your own Alpha Vantage API key from [Alpha Vantage](https://www.alphavantage.co/support/#api-key). Check that your plan permits the history and use you need.
-2. Copy `.env.local.example` to `.env.local` in the project folder. Replace `your_key_here` with your key. Do not put the key in `app.js` or commit `.env.local` to Git.
-3. Restart `start.cmd`, open `http://127.0.0.1:4173`, enter a ticker such as `MSFT`, and click **Load real ticker**.
+Lattice combines two sources on the server:
 
-The local server uses the key for Alpha Vantage's monthly adjusted price series, quarterly earnings, split history and company overview. The key is never sent to the browser. Results are cached in server memory for 12 hours to reduce API calls; restarting the server clears the cache. The provider may rate limit or restrict endpoints based on your plan. Real data is end-of-month, not a live quote.
+| Data | Source | Notes |
+| --- | --- | --- |
+| Daily closing prices (split-adjusted) | [FinancialData.net](https://financialdata.net) free plan | Requires an API key. History starts in 2015. 300 requests per day. Each new ticker uses about 10. |
+| Diluted EPS, dividends per share, company name and industry | [SEC EDGAR](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) XBRL API | Free, no key. Covers U.S. companies that file 10-K/10-Q reports. |
 
-The transformation uses each month's raw close and the latest four quarterly EPS reports published by that date. It adjusts historical prices and EPS for later stock splits to put them on a common share basis. Alpha Vantage does not clearly specify the split adjustment basis of its historical reported EPS in its public endpoint description; verify results for split-heavy companies before relying on valuations. The chart will show an error if prices, EPS or split history are incomplete. API data is currently kept in memory only; reloading the page requires another ticker load.
+Setup:
+
+1. Get a FinancialData.net API key.
+2. Copy `.env.local.example` to `.env.local` and set `FINANCIALDATA_API_KEY`. Optionally set `SEC_USER_AGENT` to a name and contact email. The SEC asks automated clients to identify themselves this way.
+3. Restart the server, enter a ticker such as `MSFT`, and press **Load real ticker**.
+
+Keys stay on the server and are never sent to the browser. Company results are cached in server memory for 24 hours. To protect the free price quota, the public server allows 20 new ticker lookups per day and 6 per visitor per hour.
+
+### How the earnings line is built
+
+1. Take every per-share fact for `EarningsPerShareDiluted` (falling back to `EarningsPerShareBasicAndDiluted`, then `EarningsPerShareBasic`) and the dividends-per-share tags, from 10-K and 10-Q filings.
+2. **Detect stock splits.** Companies restate earlier per-share figures after a split. When at least two periods are restated by the same clean ratio (2, 3, 4, 10, 20, 50…), that is treated as a split occurring by the first restating filing. Every figure filed before a split is divided by the split ratio, so everything is on today's share basis, matching the split-adjusted prices.
+3. For each period, keep the most recently filed value. Derive the fourth quarter as the fiscal year minus the nine-month year-to-date figure.
+4. Trailing-twelve-month EPS at each quarter end is the fiscal-year figure (at year end) or the sum of four contiguous quarters. Values are linearly interpolated between quarter ends, like a blended P/E, and held flat after the latest report.
+
+Limitations: earnings are GAAP, so one-time items such as write-downs or investment gains show up as spikes. Foreign filers using IFRS (20-F) aren't supported. Companies with several share classes report EPS per class and may not match the traded ticker. Always verify results for split-heavy companies.
 
 ## Deploy on Render
 
-The repo includes `render.yaml` for a Render **web service**. Render needs a GitHub repository containing these files. The local repository currently has no Git remote, so connect it to your GitHub repository and push the code before creating the Render service.
+The repo includes `render.yaml` for a Render **web service**.
 
-1. In Render, create a new **Blueprint** from the GitHub repository. The Blueprint defines a free Node web service, runs the tests during build, and checks `/health`.
-2. When Render prompts for secrets, set `ALPHA_VANTAGE_API_KEY` to your provider key and choose a separate, strong `APP_PASSWORD`. Do not commit either value to Git.
-3. After deployment, visit the Render URL. The browser login username is `lattice`; the password is your `APP_PASSWORD`.
-4. The Blueprint adds `nathanielmann.ca` as a custom domain. Once the service is live, inspect the existing GoDaddy DNS records before changing them. For a root domain, Render currently documents an `A` record at `@` pointing to `216.24.57.1`; its dashboard will show the exact verification steps. Render also adds `www` as a redirect to the root domain. Keep any unrelated email records intact.
+1. In Render, create a new **Blueprint** from the GitHub repository. It defines a free Node web service, runs the tests during build and checks `/health`.
+2. When prompted, set `FINANCIALDATA_API_KEY`, and set `SEC_USER_AGENT` to something like `Lattice research you@example.com`.
+3. The Blueprint adds `nathanielmann.ca` as a custom domain. Once the service is live, inspect the existing DNS records before changing them. Render's dashboard shows the exact records to add. Keep any unrelated email records intact.
 
-Render runs the server on its assigned `PORT` and host `0.0.0.0`. The site password is required when running on Render so the public API cannot be called anonymously. Render's free web service may spin down after inactivity; the in-memory provider cache resets when that happens. Portfolio holdings remain in each visitor's browser rather than on Render.
+Render runs the server on its assigned `PORT` and host `0.0.0.0`. The free service may spin down after inactivity, which clears the in-memory cache.
 
 ## Import your own data
 
-Select **Import CSV** and supply a ticker, company name and file. The header must include `date,price,eps`; `dividend` is optional. Dates must be `YYYY-MM-DD`, prices positive, and there must be at least two rows with unique dates. See [`sample-data.csv`](sample-data.csv).
+Select **Import CSV** and supply a ticker, company name and file. The header must include `date,price,eps`; `dividend` is optional and means trailing twelve-month dividends per share. Dates must be `YYYY-MM-DD`, prices positive, and there must be at least two rows with unique dates. See [`sample-data.csv`](sample-data.csv).
 
-The EPS column means *trailing twelve-month diluted EPS* for the observation date. Price and EPS must be adjusted to the **same share basis** across splits. The importer does not fetch data, adjust splits, handle restatements or infer EPS from quarterly reports. Use a properly licensed source before relying on real-company figures. Imported data stays in the current browser and is not sent to a server.
+The EPS column means *trailing twelve-month diluted EPS* for the observation date. Price and EPS must be on the **same share basis** across splits. Imported data stays in the current browser and is not sent to a server.
 
 ## Calculation rules
 
-For the selected lookback period, each observation with positive EPS gives a P/E of `price / eps`. Ratios outside 2–100 are excluded, and the median of the remaining ratios is the normal P/E. Historical and latest fair value equal positive trailing EPS times that normal P/E. Margin of safety is `1 - latest price / latest fair value`; a negative result means price exceeds that benchmark.
+For the selected window, each observation with positive EPS gives a P/E of `price / eps`. Ratios outside 2–100 are excluded, and the median of the rest is the normal P/E. Fair value equals trailing EPS times the normal P/E. The orange earnings area uses 15× EPS by default, a long-standing benchmark for a fairly valued business. Margin of safety is `1 - latest price / fair value`; a negative result means price is above that benchmark.
 
-EPS CAGR uses the first positive EPS and latest positive EPS in the period and the elapsed calendar years between them. The scenario compounds the latest EPS at the entered annual growth rate for five years, applies the entered exit P/E (or normal P/E by default), then annualizes the implied *price-only* return.
+EPS CAGR uses the first and latest positive EPS in the window. Annual return in range is the price change plus dividends received (not reinvested), annualized. The scenario compounds the latest EPS at the entered growth rate for five years and applies the entered exit P/E (normal P/E by default). The "with dividends" figure adds dividends at the current payout ratio.
 
-These calculations are a research aid, not a forecast or recommendation. The result omits dividends, taxes, fees, changes in share count, and uncertainty in future earnings. A company's historical multiple can be a poor guide to its future multiple.
-
-## Next development milestones
-
-1. Select and license a financial-data provider. Add server-side ingestion and a database for split-adjusted prices, reported/normalized EPS, dividends, and estimates. Do not expose provider keys in browser code.
-2. Record fiscal period, as-of date, revision history and adjustment basis so the chart cannot silently pair mismatched figures.
-3. Add provider-backed ticker search and scheduled refresh, then validate a small company set before expanding to the S&P 500.
-4. Add accounts, server-saved portfolios, screener and billing after the data and calculation pipeline is reliable.
+These calculations are a research aid, not a forecast or recommendation. A company's historical multiple can be a poor guide to its future multiple.
 
 The branding, interface and valuation calculations here are original. No competitor data or code is used.
