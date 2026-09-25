@@ -72,6 +72,6 @@ test('explains an invalid Apple ticker without making more provider calls', asyn
 });
 
 test('identifies the provider daily limit separately from ticker errors', async () => {
-  const fetchMock = async () => ({ ok: true, json: async () => ({ Information: 'Our standard API rate limit is 25 requests per day.' }) });
+  const fetchMock = async () => ({ ok: true, json: async () => ({ Information: 'Our standard API rate limit is 25 requests per day. Visit our premium plan.' }) });
   await assert.rejects(fetchCompany('AAPL', 'test-key', fetchMock), /daily request limit/);
 });

@@ -98,6 +98,7 @@
   async function loadRealTicker() {
     const ticker = $('ticker-search').value.trim().toUpperCase();
     if (!/^[A-Z0-9.\-]{1,12}$/.test(ticker)) { apiMessage('Enter a valid ticker symbol, such as MSFT.', 'error'); return; }
+    if (ticker === 'APPL') { apiMessage('Apple trades as AAPL. Enter AAPL to load its data.', 'error'); return; }
     $('load-ticker').disabled = true;
     apiMessage(`Loading ${ticker} from Alpha Vantage…`);
     try {

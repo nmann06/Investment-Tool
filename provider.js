@@ -98,10 +98,10 @@ async function providerQuery(fn, symbol, key, fetchImpl = fetch) {
   catch { throw new ProviderError('The market-data provider returned invalid JSON.'); }
   const providerNotice = String(data?.Note || data?.Information || '');
   if (providerNotice) {
-    if (/premium/i.test(providerNotice)) throw new ProviderError('Alpha Vantage requires a premium plan for this dataset.', 402);
     if (/rate limit|call frequency|requests? per day|daily limit|standard api usage limit/i.test(providerNotice)) {
       throw new ProviderError('Alpha Vantage’s daily request limit was reached. Try again after the limit resets.', 429);
     }
+    if (/premium/i.test(providerNotice)) throw new ProviderError(`Alpha Vantage requires a premium plan for ${fn}.`, 402);
     if (/api key/i.test(providerNotice)) throw new ProviderError('Alpha Vantage rejected the configured API key. Check it in Render’s environment settings.', 502);
     throw new ProviderError('Alpha Vantage could not complete this request. Try again later.', 502);
   }
