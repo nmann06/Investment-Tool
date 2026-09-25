@@ -13,6 +13,9 @@
   const time = (date) => Date.parse(`${date}T00:00:00Z`);
   const YEAR_MS = 365.2425 * 86400000;
   const API_CACHE_MS = 7 * 86400000;
+  const LIVE_MS = 60000;
+  // Quote times are New York local time without an offset, so they are formatted as-is (read as UTC, printed as UTC).
+  const quoteTime = (quote) => `${new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(`${quote.time}Z`))} ET`;
 
   // Data depth for real tickers: SEC filings only, plus the latest price, or plus full price history.
   const DEPTH = { sec: 0, price: 1, full: 2 };
@@ -81,8 +84,8 @@
       if (!response.ok) throw Error('Server unavailable');
       const status = await response.json();
       $('sign-out').hidden = !status.signOut;
-      setText('sidebar-data-status', status.configured ? 'Market data connected' : 'SEC data only');
-      setText('sidebar-data-help', status.configured ? `Load ticker reads SEC filings for free. Prices are added on request; ${status.priceRequestsLeft} price requests left today.` : 'SEC filings work without a key. Add a FinancialData.net key to .env.local for prices.');
+      setText('sidebar-data-status', 'Market data connected');
+      setText('sidebar-data-help', 'Prices from Cboe (about 15 minutes delayed, refreshed every minute); financials from SEC filings.');
     } catch {
       setText('sidebar-data-status', 'Server unavailable');
       setText('sidebar-data-help', 'Start the local server to load market data.');
@@ -93,15 +96,15 @@
     for (const id of ['api-message', 'depth-message']) { $(id).textContent = message; $(id).className = `api-message ${kind}`; }
   }
 
-  // Loads a ticker at the requested depth. SEC-only loads cost no price requests.
-  async function loadTicker(input, depth = 'sec') {
+  // Loads a ticker at the requested depth: 'full' adds Cboe prices to the SEC filings, 'sec' reads filings only.
+  async function loadTicker(input, depth = 'full') {
     const ticker = String(input || '').trim().toUpperCase();
     if (!/^[A-Z0-9.\-]{1,12}$/.test(ticker)) { depthMessage('Enter a valid ticker symbol, such as MSFT.', 'error'); return; }
     if (ticker === 'APPL') { depthMessage('Apple trades as AAPL. Enter AAPL to load its data.', 'error'); return; }
     const existing = companies[ticker];
     if (existing && depthOf(existing) >= DEPTH[depth]) { selectTicker(ticker); return; }
     document.querySelectorAll('#load-ticker, .depth-button').forEach((button) => { button.disabled = true; });
-    depthMessage(depth === 'sec' ? `Reading ${ticker}'s SEC filings…` : depth === 'price' ? `Adding ${ticker}'s current price…` : `Loading ${ticker}'s price history…`);
+    depthMessage(depth === 'sec' ? `Reading ${ticker}'s SEC filings…` : `Loading ${ticker}'s filings and prices…`);
     try {
       const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=${depth}`);
       const result = await response.json().catch(() => ({}));
@@ -112,11 +115,10 @@
       saveStore('lattice.api.v1', apiCache);
       selectTicker(ticker);
       const splits = result.splits?.length ? ` Adjusted for ${result.splits.length} stock split${result.splits.length > 1 ? 's' : ''}.` : '';
-      const loaded = depthOf(result) === DEPTH.sec ? `${result.name}: SEC filings loaded with no price requests. Add the current price for valuation, or the price chart for history.`
-        : depthOf(result) === DEPTH.price ? `${result.name}: current price added (${result.rows.at(-1).date}).`
-        : `${result.name}: price history loaded, ${result.rows[0].date.slice(0, 4)}–${result.rows.at(-1).date.slice(0, 7)}.${splits}`;
-      depthMessage(result.stale ? `Showing ${result.name} data from ${String(result.fetchedAt).slice(0, 10)}; today's price-data allowance has been reached.` : loaded, result.stale ? '' : 'success');
-      if (depth === 'sec' && view === 'research') showView('fundamentals');
+      const loaded = depthOf(result) === DEPTH.sec ? `${result.name}: SEC filings loaded.${result.priceError ? ` ${result.priceError}` : ''}`
+        : `${result.name}: prices ${result.rows[0].date.slice(0, 4)}–${result.rows.at(-1).date.slice(0, 7)}${result.quote ? `, latest ${money(result.quote.price)} at ${quoteTime(result.quote)}` : ''}.${splits}`;
+      depthMessage(result.stale ? `Showing saved ${result.name} data; the data sources could not be reached.` : loaded, result.stale || result.priceError ? '' : 'success');
+      if (depthOf(result) === DEPTH.sec && view === 'research') showView('fundamentals');
       renderPortfolio();
       checkApiStatus();
     } catch (error) { depthMessage(error.message || 'Could not load market data.', 'error'); }
@@ -126,10 +128,7 @@
   // Offers the next data levels for the selected real ticker.
   function renderDepthActions(company) {
     const level = depthOf(company);
-    const buttons = company?.source !== 'api' ? '' : [
-      level < DEPTH.price ? '<button class="outline-button depth-button" data-depth="price" type="button">Add current price<small>1 request</small></button>' : '',
-      level < DEPTH.full ? '<button class="outline-button depth-button" data-depth="full" type="button">Load price chart<small>up to 10 requests</small></button>' : ''
-    ].join('');
+    const buttons = company?.source === 'api' && level < DEPTH.full ? '<button class="outline-button depth-button" data-depth="full" type="button">Load prices</button>' : '';
     document.querySelectorAll('.depth-actions').forEach((element) => { element.innerHTML = buttons; });
   }
 
@@ -146,7 +145,7 @@
     setText('company-avatar', company.name.charAt(0).toUpperCase());
     setText('company-name', company.name);
     setText('company-ticker', company.ticker);
-    const sourceLabel = company.source === 'api' ? `${company.provider || 'Market data'} · updated ${String(company.fetchedAt || '').slice(0, 10)}` : 'Imported data';
+    const sourceLabel = company.source !== 'api' ? 'Imported data' : company.quote ? `${company.provider} · last trade ${quoteTime(company.quote)} (delayed)` : `${company.provider || 'Market data'} · updated ${String(company.fetchedAt || '').slice(0, 10)}`;
     setText('company-meta', `${company.sector || 'Unclassified'} · ${sourceLabel}`);
     setText('source-badge', company.source === 'api' ? (depthOf(company) === DEPTH.full ? 'REAL MARKET DATA' : 'SEC EDGAR DATA') : 'IMPORTED DATA');
     const needsChart = depthOf(company) < DEPTH.full;
@@ -169,7 +168,7 @@
     $('exit-pe-input').disabled = priceOnly;
     setText('chart-footnote', company.methodologyNote || 'Normal P/E is the median observed P/E within the selected period. Prices and EPS must use the same share basis.');
     setText('metric-price', money(result?.latest.price));
-    setText('metric-price-date', result ? `Month-end close, ${result.latest.date}` : 'No valid data');
+    setText('metric-price-date', !result ? 'No valid data' : company.quote?.date === result.latest.date ? `Delayed quote, ${quoteTime(company.quote)}` : `Month-end close, ${result.latest.date}`);
     setText('metric-current-pe', result?.currentPe == null ? '—' : `${number(result.currentPe)}×`);
     setText('metric-normal-pe', result?.normalPe == null ? '—' : `${number(result.normalPe)}×`);
     setText('metric-observations', priceOnly ? 'Requires EPS history' : result ? `Median of ${result.observationCount} months in range` : 'Historical median');
@@ -338,7 +337,7 @@
     $('fund-company').hidden = !company;
     if (!company) {
       setText('fund-empty-title', 'Enter a U.S. ticker to begin');
-      setText('fund-empty-text', 'Use the search box on the Research page. SEC filings load with no price requests.');
+      setText('fund-empty-text', 'Use the search box on the Research page to load a company\'s SEC filings and prices.');
       $('fund-empty').hidden = false; $('fund-content').hidden = true; return;
     }
     renderDepthActions(company);
@@ -491,7 +490,7 @@
     setText('portfolio-gain', missing.length ? '—' : money(totalValue - totalCost));
     $('portfolio-gain').className = `metric-value ${totalValue - totalCost >= 0 ? 'positive' : 'negative'}`;
     setText('holding-count', holdings.length);
-    const missingNotice = missing.length ? `<div class="api-message">Add the current price for ${missing.map((item) => escapeHtml(item.ticker)).join(', ')} (load the ticker, then Add current price) to calculate the full portfolio value.</div>` : '';
+    const missingNotice = missing.length ? `<div class="api-message">Load prices for ${missing.map((item) => escapeHtml(item.ticker)).join(', ')} (open the ticker, then Load prices) to calculate the full portfolio value.</div>` : '';
     $('holdings-content').innerHTML = missingNotice + (active.length ? `<table class="holdings-table"><thead><tr><th>COMPANY</th><th>SHARES</th><th>AVG COST</th><th>LATEST PRICE</th><th>MARKET VALUE</th><th>GAIN / LOSS</th><th></th></tr></thead><tbody>${active.map((item) => { const company = companies[item.ticker]; const price = company.rows.at(-1).price; const gain = item.shares * (price - item.cost); return `<tr><td>${escapeHtml(company.name)} <span class="ticker-tag">${escapeHtml(item.ticker)}</span></td><td>${number(item.shares, 3)}</td><td>${money(item.cost)}</td><td>${money(price)}</td><td>${money(item.shares * price)}</td><td class="${gain >= 0 ? 'positive' : 'negative'}">${money(gain)}</td><td><button data-remove="${escapeHtml(item.ticker)}" aria-label="Remove ${escapeHtml(item.ticker)} holding">Remove</button></td></tr>`; }).join('')}</tbody></table>` : missing.length ? '' : '<div class="empty-state"><span class="empty-icon">▥</span><strong>No holdings yet</strong>Add a position to see your portfolio value here.</div>');
   }
 
@@ -543,10 +542,39 @@
   new ResizeObserver(() => { cancelAnimationFrame(resizeFrame); resizeFrame = requestAnimationFrame(() => { if (currentResult && view === 'research') renderChart(currentResult); }); }).observe($('valuation-chart'));
 
   setText('today-label', new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(new Date()));
+  // Keeps prices current for the selected ticker and every holding. The server answers from its cache
+  // plus a quote it refreshes at most once a minute, so this costs no new filing or history requests.
+  let refreshing = false;
+  async function refreshPrices() {
+    if (document.hidden || refreshing) return;
+    refreshing = true;
+    try {
+      const tickers = new Set([selectedTicker, ...holdings.map((item) => item.ticker)]);
+      for (const ticker of tickers) {
+        const company = companies[ticker];
+        if (company?.source !== 'api' || depthOf(company) < DEPTH.full) continue;
+        try {
+          const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=full`);
+          if (!response.ok) continue;
+          const result = await response.json();
+          if (!Array.isArray(result.rows) || !result.rows.length || depthOf(result) < DEPTH.full) continue;
+          companies[ticker] = result;
+          apiCache[ticker] = result;
+        } catch { continue; }
+        if (ticker === selectedTicker) { renderResearch(); if (view === 'fundamentals') renderFundamentals(); }
+      }
+      saveStore('lattice.api.v1', apiCache);
+      renderPortfolio();
+    } finally { refreshing = false; }
+  }
+
   renderChips(); renderResearch(); renderPortfolio(); showView(location.hash.slice(1) || 'research'); checkApiStatus();
-  // Shareable links: /app?ticker=AAPL opens that company from SEC data; add &depth=price or &depth=full for prices.
+  // Shareable links: /app?ticker=AAPL opens that company with prices; add &depth=sec for filings only.
   const params = new URLSearchParams(location.search);
   const linked = (params.get('ticker') || '').trim().toUpperCase();
-  const linkedDepth = params.get('depth') in DEPTH ? params.get('depth') : 'sec';
+  const linkedDepth = params.get('depth') === 'sec' ? 'sec' : 'full';
   if (linked) loadTicker(linked, linkedDepth);
+  refreshPrices();
+  setInterval(refreshPrices, LIVE_MS);
+  document.addEventListener('visibilitychange', refreshPrices);
 })();

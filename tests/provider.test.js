@@ -1,44 +1,33 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSplits, buildFundamentals, valueAt, combine, fetchPrices, fetchCompany } = require('../provider.js');
+const { detectSplits, buildFundamentals, valueAt, withQuote, combine, fetchPrices, fetchQuote, fetchCompany } = require('../provider.js');
 
-// Simulated provider: `days` daily closes, newest first, served 300 per page.
-function priceServer(days, price = () => 100) {
-  const all = Array.from({ length: days }, (_, index) => ({ date: new Date(Date.UTC(2026, 8, 1) - index * 86400000).toISOString().slice(0, 10), close: price(index) }));
+const respond = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
+
+test('price history comes from one Cboe request and drops unusable rows', async () => {
   const calls = [];
-  const fetchImpl = async (url) => {
-    const offset = Number(new URL(url).searchParams.get('offset'));
-    calls.push(offset);
-    return { ok: true, status: 200, json: async () => all.slice(offset, offset + 300) };
-  };
-  return { all, calls, fetchImpl };
-}
-
-test('a first price fetch pages through the full history', async () => {
-  const server = priceServer(1000);
-  let counted = 0;
-  const records = await fetchPrices('TEST', 'key', server.fetchImpl, [], () => counted++);
-  assert.equal(records.length, 1000);
-  assert.deepEqual(server.calls, [0, 300, 600, 900]);
-  assert.equal(counted, 4);
+  const fetchImpl = async (url) => { calls.push(String(url)); return respond({ data: [{ date: '2024-01-02', close: 10 }, { date: 'bad', close: 11 }, { date: '2024-01-03', close: 0 }, { date: '2024-01-04', close: 12 }] }); };
+  const records = await fetchPrices('BRK.B', fetchImpl);
+  assert.deepEqual(calls, ['https://cdn.cboe.com/api/global/delayed_quotes/charts/historical/BRK.B.json']);
+  assert.deepEqual(records, [{ date: '2024-01-02', close: 10 }, { date: '2024-01-04', close: 12 }]);
 });
 
-test('a refresh with stored history costs one request and merges without duplicates', async () => {
-  const server = priceServer(1000);
-  const known = server.all.slice(5);
-  const records = await fetchPrices('TEST', 'key', server.fetchImpl, known);
-  assert.deepEqual(server.calls, [0]);
-  assert.equal(records.length, 1000);
-  assert.equal(new Set(records.map((row) => row.date)).size, 1000);
-  assert.equal(records[0].date, server.all[0].date);
+test('a symbol Cboe does not carry (403) means no history rather than an error', async () => {
+  assert.deepEqual(await fetchPrices('ZZZZQ', async () => respond({}, 403)), []);
+  assert.equal(await fetchQuote('ZZZZQ', async () => respond({}, 403)), null);
 });
 
-test('a split since the last fetch discards the stored history', async () => {
-  const server = priceServer(1000, () => 50);
-  const known = server.all.slice(5).map((row) => ({ ...row, close: 100 }));
-  const records = await fetchPrices('TEST', 'key', server.fetchImpl, known);
-  assert.deepEqual(server.calls, [0, 0, 300, 600, 900]);
-  assert.ok(records.every((row) => row.close === 50));
+test('the quote takes its trading date from the New York last-trade time', async () => {
+  const quote = await fetchQuote('AAPL', async () => respond({ timestamp: '2026-09-25 18:41:31', data: { current_price: 339.93, prev_day_close: 335.92, last_trade_time: '2026-09-25T14:26:29' } }));
+  assert.deepEqual(quote, { price: 339.93, date: '2026-09-25', time: '2026-09-25T14:26:29', previousClose: 335.92 });
+});
+
+test('the quote replaces today\'s bar and never rewrites older history', () => {
+  const history = [{ date: '2026-09-23', close: 337 }, { date: '2026-09-24', close: 335.92 }];
+  assert.deepEqual(withQuote(history, { date: '2026-09-25', price: 340 }).at(-1), { date: '2026-09-25', close: 340 });
+  assert.deepEqual(withQuote(history, { date: '2026-09-24', price: 336 }), [{ date: '2026-09-23', close: 337 }, { date: '2026-09-24', close: 336 }]);
+  assert.equal(withQuote(history, { date: '2026-09-20', price: 1 }), history);
+  assert.equal(withQuote(history, null), history);
 });
 
 const fact = (start, end, val, filed, form = '10-Q') => ({ start, end, val, filed, form });
@@ -101,37 +90,48 @@ test('companies without dividend filings show zero dividends', () => {
   assert.equal(company.hasFundamentals, true);
 });
 
-test('SEC-only loads make no price requests and need no key', async () => {
+// Simulated SEC EDGAR plus Cboe. `history` null makes Cboe answer 403.
+function secAndCboe(history, quote = null) {
   const calls = [];
-  const respond = (body) => ({ ok: true, status: 200, json: async () => body });
-  const fetchImpl = async (url) => {
-    const href = String(url);
-    calls.push(href);
-    if (href.includes('company_tickers')) return respond({ 0: { cik_str: 123, ticker: 'TEST', title: 'Test Co' } });
-    if (href.includes('companyfacts')) return respond({ facts: { 'us-gaap': gaap(splitHistory) } });
-    return respond({ name: 'Test Company Inc.' });
-  };
-  const company = await fetchCompany('TEST', '', { fetchImpl, maxPages: 0 });
-  assert.equal(company.depth, 'sec');
-  assert.deepEqual(company.rows, []);
-  assert.ok(company.annual.length > 0);
-  assert.ok(!calls.some((href) => href.includes('financialdata')));
-});
-
-test('fetchCompany joins SEC and price responses without exposing the key', async () => {
-  const calls = [];
-  const respond = (body) => ({ ok: true, status: 200, json: async () => body });
   const fetchImpl = async (url) => {
     const href = String(url);
     calls.push(href);
     if (href.includes('company_tickers')) return respond({ 0: { cik_str: 123, ticker: 'TEST', title: 'Test Co' } });
     if (href.includes('companyfacts')) return respond({ facts: { 'us-gaap': gaap(splitHistory) } });
     if (href.includes('submissions')) return respond({ name: 'Test Company Inc.', sicDescription: 'Software' });
-    return respond([{ date: '2024-06-28', close: 120 }, { date: '2024-05-31', close: 115 }]);
+    if (href.includes('charts/historical')) return history ? respond({ data: history }) : respond({}, 403);
+    if (href.includes('delayed_quotes/quotes')) return quote ? respond({ data: quote }) : respond({}, 403);
+    throw Error(`unexpected ${href}`);
   };
-  const company = await fetchCompany('TEST', 'secret', { fetchImpl });
+  return { calls, fetchImpl };
+}
+
+test('SEC-only loads make no Cboe requests', async () => {
+  const server = secAndCboe([]);
+  const company = await fetchCompany('TEST', { fetchImpl: server.fetchImpl, withPrices: false });
+  assert.equal(company.depth, 'sec');
+  assert.deepEqual(company.rows, []);
+  assert.ok(company.annual.length > 0);
+  assert.ok(!server.calls.some((href) => href.includes('cboe')));
+});
+
+test('fetchCompany joins SEC filings, Cboe history and the latest quote', async () => {
+  const server = secAndCboe([{ date: '2024-05-31', close: 115 }, { date: '2024-06-27', close: 120 }], { current_price: 125, prev_day_close: 120, last_trade_time: '2024-06-28T15:00:00' });
+  const company = await fetchCompany('TEST', { fetchImpl: server.fetchImpl });
   assert.equal(company.name, 'Test Company Inc.');
   assert.equal(company.sector, 'Software');
-  assert.ok(calls.some((href) => href.includes('CIK0000000123')));
-  assert.ok(!JSON.stringify(company).includes('secret'));
+  assert.equal(company.depth, 'full');
+  assert.equal(company.provider, 'Cboe + SEC EDGAR');
+  assert.deepEqual(company.rows.at(-1).date, '2024-06-28');
+  assert.equal(company.rows.at(-1).price, 125);
+  assert.equal(company.quote.price, 125);
+  assert.ok(server.calls.some((href) => href.includes('CIK0000000123')));
+});
+
+test('a ticker Cboe does not carry still returns its SEC data with a notice', async () => {
+  const server = secAndCboe(null);
+  const company = await fetchCompany('TEST', { fetchImpl: server.fetchImpl });
+  assert.equal(company.depth, 'sec');
+  assert.ok(company.annual.length > 0);
+  assert.match(company.priceError, /Cboe has no price history for TEST/);
 });

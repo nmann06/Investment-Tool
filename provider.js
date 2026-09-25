@@ -1,11 +1,11 @@
-const PRICE_BASE = 'https://financialdata.net/api/v1/stock-prices';
+// Cboe's public site data: keyless, split-adjusted daily bars from 2004, and a ~15-minute delayed quote.
+const CBOE_HISTORY = 'https://cdn.cboe.com/api/global/delayed_quotes/charts/historical/';
+const CBOE_QUOTE = 'https://cdn.cboe.com/api/global/delayed_quotes/quotes/';
 const SEC_TICKERS = 'https://www.sec.gov/files/company_tickers.json';
 const SEC_FACTS = 'https://data.sec.gov/api/xbrl/companyfacts/';
 const SEC_SUBMISSIONS = 'https://data.sec.gov/submissions/';
 // FRED's graph CSV download needs no API key. DGS10 is the 10-year Treasury constant-maturity yield.
 const FRED_CSV = 'https://fred.stlouisfed.org/graph/fredgraph.csv?id=';
-const PAGE_SIZE = 300;
-const MAX_PAGES = 12;
 const DAY = 86400000;
 const EPS_TAGS = ['EarningsPerShareDiluted', 'EarningsPerShareBasicAndDiluted', 'EarningsPerShareBasic'];
 const DIVIDEND_TAGS = ['CommonStockDividendsPerShareDeclared', 'CommonStockDividendsPerShareCashPaid'];
@@ -299,9 +299,15 @@ function buildFundamentals(usGaap, dei = null) {
   return { eps, dividends, annual, splits, paysDividends: dividendFacts.length > 0, ttm: statements.ttm, balance: statements.balance, sharesOutstanding: statements.sharesOutstanding };
 }
 
-// depth: 'sec' has no prices, 'price' has about a year of month-end prices, 'full' has all available history.
-function combine({ symbol, name, sector, prices, fundamentals, depth = 'full', fetchedAt = new Date().toISOString() }) {
-  const monthly = depth === 'sec' ? [] : monthlyPrices(prices);
+// The latest quote replaces any bar on or after its trading date, so the current month ends at the live price.
+function withQuote(records, quote) {
+  if (!quote || records.some((row) => row.date > quote.date)) return records;
+  return [...records.filter((row) => row.date < quote.date), { date: quote.date, close: quote.price }];
+}
+
+// depth: 'sec' has no prices, 'full' has all available history plus the latest quote.
+function combine({ symbol, name, sector, prices, fundamentals, quote = null, priceError = null, depth = 'full', fetchedAt = new Date().toISOString() }) {
+  const monthly = depth === 'sec' ? [] : monthlyPrices(withQuote(prices, quote));
   if (depth !== 'sec' && monthly.length < 2) throw new ProviderError(`Not enough price history was found for ${symbol}. Check the ticker.`, 404);
   const { eps, dividends, annual, splits, paysDividends, ttm, balance, sharesOutstanding } = fundamentals;
   const rows = monthly.map((row) => {
@@ -317,7 +323,7 @@ function combine({ symbol, name, sector, prices, fundamentals, depth = 'full', f
     sector: sector || 'Unclassified',
     source: 'api',
     depth,
-    provider: depth === 'sec' ? 'SEC EDGAR' : 'FinancialData.net + SEC EDGAR',
+    provider: depth === 'sec' ? 'SEC EDGAR' : 'Cboe + SEC EDGAR',
     currency: 'USD',
     hasFundamentals: true,
     rows,
@@ -326,8 +332,10 @@ function combine({ symbol, name, sector, prices, fundamentals, depth = 'full', f
     balance: balance || null,
     sharesOutstanding: sharesOutstanding || null,
     splits,
+    quote: depth === 'sec' ? null : quote,
+    priceError,
     fetchedAt,
-    methodologyNote: `Month-end closing prices (split-adjusted) from FinancialData.net. Trailing diluted EPS and dividends per share from SEC 10-K/10-Q filings, restated to today's share basis and interpolated between quarter ends.${splitNote}`
+    methodologyNote: `Month-end closing prices (split-adjusted) from Cboe, with the current month at the latest delayed quote. Trailing diluted EPS and dividends per share from SEC 10-K/10-Q filings, restated to today's share basis and interpolated between quarter ends.${splitNote}`
   };
 }
 
@@ -335,41 +343,32 @@ async function fetchJson(url, options, label) {
   let response;
   try { response = await options.fetchImpl(url, { headers: options.headers, signal: AbortSignal.timeout(20000) }); }
   catch { throw new ProviderError(`Could not reach ${label}. Try again shortly.`); }
-  if (response.status === 404) return null;
-  if (response.status === 401 || response.status === 403) throw new ProviderError(label === 'FinancialData.net' ? 'FinancialData.net rejected the API key. Check the key and plan.' : `${label} refused the request.`, 502);
+  // Cboe answers 403 for symbols it doesn't carry.
+  if (response.status === 404 || (label === 'Cboe' && response.status === 403)) return null;
+  if (response.status === 401 || response.status === 403) throw new ProviderError(`${label} refused the request.`, 502);
   if (response.status === 429) throw new ProviderError(`${label} request limit reached. Try again later.`, 429);
   if (!response.ok) throw new ProviderError(`${label} returned HTTP ${response.status}.`);
   try { return await response.json(); }
   catch { throw new ProviderError(`${label} returned invalid JSON.`); }
 }
 
-// Pages newest-first. With previously fetched history, stops at the first page that overlaps it,
-// so a refresh usually costs one request instead of the full ~10.
-async function fetchPrices(symbol, key, fetchImpl, known = [], onRequest = () => {}, maxPages = MAX_PAGES) {
-  const knownByDate = new Map(known.filter((row) => validDate(row.date)).map((row) => [row.date, row]));
-  const newestKnown = [...knownByDate.keys()].sort().at(-1);
-  const records = [];
-  for (let page = 0; page < maxPages; page++) {
-    const url = new URL(PRICE_BASE);
-    url.searchParams.set('identifier', symbol);
-    url.searchParams.set('offset', String(page * PAGE_SIZE));
-    url.searchParams.set('key', key);
-    onRequest();
-    const batch = await fetchJson(url, { fetchImpl }, 'FinancialData.net');
-    if (batch != null && !Array.isArray(batch)) throw new ProviderError('FinancialData.net returned an unexpected price response.');
-    if (!batch || !batch.length) break;
-    records.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    if (newestKnown && batch.some((row) => validDate(row.date) && row.date <= newestKnown)) {
-      // A split since the last fetch restates all history; the stored copy is then on the old share basis.
-      const restated = batch.some((row) => { const old = knownByDate.get(row.date); return old && Math.abs(finiteNumber(row.close) / finiteNumber(old.close) - 1) > 0.01; });
-      if (restated) return fetchPrices(symbol, key, fetchImpl, [], onRequest, maxPages);
-      break;
-    }
-  }
-  const merged = new Map(knownByDate);
-  for (const row of records) if (validDate(row.date)) merged.set(row.date, row);
-  return [...merged.values()].sort((a, b) => b.date.localeCompare(a.date));
+// The whole daily history in one file, through the previous close. Cboe writes class shares with a dot (BRK.B).
+async function fetchPrices(symbol, fetchImpl = fetch) {
+  const body = await fetchJson(`${CBOE_HISTORY}${encodeURIComponent(symbol)}.json`, { fetchImpl }, 'Cboe');
+  if (body == null) return [];
+  if (!Array.isArray(body.data)) throw new ProviderError('Cboe returned an unexpected price response.');
+  return body.data
+    .map((row) => ({ date: row.date, close: finiteNumber(row.close) }))
+    .filter((row) => validDate(row.date) && row.close != null && row.close > 0);
+}
+
+// Latest trade, about 15 minutes delayed. last_trade_time is New York local time, e.g. "2026-09-25T14:26:29".
+async function fetchQuote(symbol, fetchImpl = fetch) {
+  const body = await fetchJson(`${CBOE_QUOTE}${encodeURIComponent(symbol)}.json`, { fetchImpl }, 'Cboe');
+  const price = finiteNumber(body?.data?.current_price);
+  const time = String(body?.data?.last_trade_time || '');
+  if (price == null || price <= 0 || !validDate(time.slice(0, 10))) return null;
+  return { price, date: time.slice(0, 10), time, previousClose: finiteNumber(body.data.prev_day_close) };
 }
 
 let tickerCache = null;
@@ -400,32 +399,38 @@ async function fetchFredLatest(series, options) {
   return { series, ...observations.at(-1) };
 }
 
-// maxPages 0 skips the price API entirely and returns SEC data only.
-async function fetchCompany(symbol, key, { fetchImpl = fetch, userAgent, knownPrices = [], onRequest, onPrices, maxPages = MAX_PAGES } = {}) {
+// Everything except the live quote, so the server can cache it for a day and add fresh quotes on top.
+// withPrices false skips Cboe and returns SEC data only. If Cboe has no history, SEC data is still returned with priceError set.
+async function fetchCompanyData(symbol, { fetchImpl = fetch, userAgent, withPrices = true } = {}) {
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) throw new ProviderError('Invalid ticker.', 400);
-  const depth = maxPages === 0 ? 'sec' : maxPages >= MAX_PAGES ? 'full' : 'price';
-  if (!key && depth !== 'sec') throw new ProviderError('Set FINANCIALDATA_API_KEY on the server.', 503);
-  const sec = { fetchImpl, headers: { 'User-Agent': userAgent || 'Lettuce investment research (nathanielmann.ca)', Accept: 'application/json' } };
+  const sec ={ fetchImpl, headers: { 'User-Agent': userAgent || 'Lettuce investment research (nathanielmann.ca)', Accept: 'application/json' } };
   const entry = await lookupCik(symbol, sec);
   if (!entry) throw new ProviderError(`${symbol} was not found in SEC filings. Lettuce supports U.S.-listed companies that file 10-K and 10-Q reports.`, 404);
   const cik = String(entry.cik_str).padStart(10, '0');
+  let priceError = null;
   const [facts, submissions, prices] = await Promise.all([
     fetchJson(`${SEC_FACTS}CIK${cik}.json`, sec, 'SEC EDGAR'),
     fetchJson(`${SEC_SUBMISSIONS}CIK${cik}.json`, sec, 'SEC EDGAR').catch(() => null),
-    depth === 'sec' ? [] : fetchPrices(symbol, key, fetchImpl, knownPrices, onRequest, maxPages)
+    withPrices ? fetchPrices(symbol, fetchImpl).catch((error) => { priceError = error.message; return []; }) : []
   ]);
-  if (onPrices && prices.length) onPrices(prices);
   if (!facts?.facts?.['us-gaap']) throw new ProviderError(`SEC filings for ${symbol} do not include U.S. GAAP financial data.`, 422);
-  if (depth !== 'sec' && !prices.length) throw new ProviderError(`No price history was found for ${symbol}. Check the ticker.`, 404);
+  if (withPrices && !prices.length) priceError ||= `Cboe has no price history for ${symbol}, so only SEC data is shown.`;
   const filedName = submissions?.name || entry.title || symbol;
-  return combine({
+  return {
     symbol,
     name: /[a-z]/.test(filedName) ? filedName : filedName.toLowerCase().replace(/\b[a-z]/g, (letter) => letter.toUpperCase()),
     sector: submissions?.sicDescription,
     prices,
-    depth,
+    priceError,
+    depth: prices.length ? 'full' : 'sec',
     fundamentals: buildFundamentals(facts.facts['us-gaap'], facts.facts.dei)
-  });
+  };
 }
 
-module.exports = { ProviderError, MAX_PAGES, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, latestTtm, valueAt, buildFundamentals, combine, fetchPrices, fetchFredSeries, fetchFredLatest, fetchCompany };
+async function fetchCompany(symbol, options = {}) {
+  const data = await fetchCompanyData(symbol, options);
+  const quote = data.depth === 'full' ? await fetchQuote(symbol, options.fetchImpl).catch(() => null) : null;
+  return combine({ ...data, quote });
+}
+
+module.exports = { ProviderError, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, latestTtm, valueAt, buildFundamentals, withQuote, combine, fetchPrices, fetchQuote, fetchFredSeries, fetchFredLatest, fetchCompanyData, fetchCompany };

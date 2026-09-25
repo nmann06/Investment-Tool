@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { fetchCompany, fetchFredSeries, fetchFredLatest, monthlyPrices, ProviderError, MAX_PAGES } = require('./provider');
+const { fetchCompanyData, fetchQuote, combine, fetchFredSeries, fetchFredLatest, monthlyPrices, ProviderError } = require('./provider');
 const auth = require('./auth');
 
 const root = __dirname;
@@ -22,11 +22,11 @@ const cache = new Map();
 const inFlight = new Map();
 let market = null;
 let marketInFlight = null;
-const priceHistory = new Map();
+const quotes = new Map();
+const quoteFlights = new Map();
 const cacheDurationMs = 24 * 60 * 60 * 1000;
-const DAILY_PROVIDER_BUDGET = 280;
-const MAX_PRICE_HISTORIES = 150;
-const providerCalls = [];
+const QUOTE_MS = 60 * 1000;
+const MAX_QUOTES = 500;
 const ipLookups = new Map();
 const failedLogins = new Map();
 
@@ -39,7 +39,6 @@ function setting(name) {
     return value === 'your_key_here' ? '' : value;
   } catch { return ''; }
 }
-const apiKey = () => setting('FINANCIALDATA_API_KEY');
 const appPassword = () => setting('APP_PASSWORD');
 // Locally the tool is open unless a password is set. On Render it always requires one.
 const authRequired = () => Boolean(appPassword()) || Boolean(process.env.RENDER);
@@ -105,28 +104,29 @@ async function handleLogin(request, response, url) {
   return redirect(response, next, { 'Set-Cookie': cookie });
 }
 
-function providerBudgetLeft(now = Date.now()) {
-  while (providerCalls.length && providerCalls[0] < now - 86400000) providerCalls.shift();
-  return DAILY_PROVIDER_BUDGET - providerCalls.length;
-}
-
-// A new ticker costs up to MAX_PAGES provider calls; refreshing one with stored history usually costs 1.
-function allowLookup(request, cost) {
+// Cboe and the SEC have no quota, but uncached company loads are still limited to 60 per visitor per hour
+// so one visitor can't hammer either service. Quote refreshes are cached and not counted.
+function allowLookup(request) {
   const now = Date.now();
-  if (providerBudgetLeft(now) < cost) return false;
-  // Each visitor may spend up to 60 provider requests an hour (about five new tickers, or many peers and refreshes).
   const ip = clientIp(request);
   const previous = (ipLookups.get(ip) || []).filter((time) => time > now - 3600000);
-  if (previous.length + cost > 60) return false;
-  for (let i = 0; i < cost; i++) previous.push(now);
+  if (previous.length >= 60) return false;
+  previous.push(now);
   ipLookups.set(ip, previous);
   return true;
 }
 
-function keepPrices(symbol, records) {
-  priceHistory.delete(symbol);
-  priceHistory.set(symbol, records.map((row) => ({ date: row.date, close: row.close })));
-  while (priceHistory.size > MAX_PRICE_HISTORIES) priceHistory.delete(priceHistory.keys().next().value);
+// Every visitor shares one Cboe quote request per symbol per minute. On failure the last quote is reused.
+async function latestQuote(symbol) {
+  const saved = quotes.get(symbol);
+  if (saved && Date.now() - saved.time < QUOTE_MS) return saved.quote;
+  if (!quoteFlights.has(symbol)) quoteFlights.set(symbol, fetchQuote(symbol).catch(() => null).finally(() => quoteFlights.delete(symbol)));
+  const quote = await quoteFlights.get(symbol);
+  if (!quote) return saved?.quote || null;
+  quotes.delete(symbol);
+  quotes.set(symbol, { time: Date.now(), quote });
+  while (quotes.size > MAX_QUOTES) quotes.delete(quotes.keys().next().value);
+  return quote;
 }
 
 // Risk-free rate and a market proxy for beta, both from FRED's keyless CSV downloads. Refreshed daily.
@@ -151,55 +151,46 @@ async function handleMarket(request, response) {
   return sendJson(response, 200, { riskFree: market.riskFree, benchmark: market.benchmark });
 }
 
-// Three levels of data per ticker:
-//   sec   — SEC filings only, no price requests
-//   price — plus about a year of prices (1 request), enough for current valuation
-//   full  — plus all price history for the chart and beta (~10 requests new, 1 to refresh)
-const DEPTHS = { sec: 0, price: 1, full: 2 };
-const depthOf = (company) => DEPTHS[company?.depth] ?? DEPTHS.full;
+// Two levels of data per ticker:
+//   sec  — SEC filings only
+//   full — plus Cboe's daily price history and the latest delayed quote
+// Filings and history are cached for a day; the quote is refreshed at most once a minute per symbol.
+const DEPTHS = { sec: 0, full: 1 };
+
+// Combining is cheap, so each response is rebuilt from the cached data with the latest quote.
+async function respondWithCompany(response, symbol, data, extra = {}) {
+  const quote = data.depth === 'full' ? await latestQuote(symbol) : null;
+  return sendJson(response, 200, { ...combine({ ...data, quote }), ...extra });
+}
 
 async function handleCompany(request, response, url) {
   if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
   const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
   if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) return sendJson(response, 400, { error: 'Enter a valid ticker.' });
   let depth = url.searchParams.get('depth') || 'full';
-  if (depth === 'peer') depth = 'price';
+  // Older clients ask for 'price' or 'peer'; the full history now costs the same single request.
+  if (depth === 'price' || depth === 'peer') depth = 'full';
   if (!(depth in DEPTHS)) return sendJson(response, 400, { error: 'Unknown data depth.' });
   const saved = cache.get(symbol);
-  const fresh = saved && Date.now() - saved.time < cacheDurationMs;
-  if (fresh && depthOf(saved.company) >= DEPTHS[depth]) return sendJson(response, 200, saved.company);
-  const key = apiKey();
-  if (depth !== 'sec' && !key) return sendJson(response, 503, { error: 'Add FINANCIALDATA_API_KEY to the server configuration.' });
-  const known = priceHistory.get(symbol) || [];
-  // With stored history, the full chart costs the same single request as the latest price.
-  if (depth === 'price' && known.length) depth = 'full';
-  const cost = depth === 'sec' ? 0 : depth === 'price' || known.length ? 1 : MAX_PAGES;
-  const flight = `${symbol}:${depth}`;
-  if (!inFlight.has(flight) && cost && !allowLookup(request, cost)) {
-    if (saved && depthOf(saved.company) >= DEPTHS[depth]) return sendJson(response, 200, { ...saved.company, stale: true });
-    return sendJson(response, 429, { error: 'Today’s price-data allowance has been used. SEC data is still available; try prices again tomorrow.' });
-  }
+  const deepEnough = saved && DEPTHS[saved.data.depth] >= DEPTHS[depth];
   try {
+    if (deepEnough && Date.now() - saved.time < cacheDurationMs) return await respondWithCompany(response, symbol, saved.data);
+    const flight = `${symbol}:${depth}`;
     if (!inFlight.has(flight)) {
-      inFlight.set(flight, fetchCompany(symbol, key, {
-        userAgent: setting('SEC_USER_AGENT'),
-        maxPages: depth === 'sec' ? 0 : depth === 'price' ? 1 : MAX_PAGES,
-        knownPrices: depth === 'full' ? known : [],
-        onRequest: () => providerCalls.push(Date.now()),
-        // Only complete histories are kept; a one-page fetch would make later refreshes look complete.
-        onPrices: depth === 'full' ? (records) => keepPrices(symbol, records) : undefined
-      }));
+      if (!allowLookup(request)) {
+        if (deepEnough) return await respondWithCompany(response, symbol, saved.data, { stale: true });
+        return sendJson(response, 429, { error: 'Too many new tickers in the last hour. Try again shortly.' });
+      }
+      inFlight.set(flight, fetchCompanyData(symbol, { userAgent: setting('SEC_USER_AGENT'), withPrices: depth === 'full' }).finally(() => inFlight.delete(flight)));
     }
-    const company = await inFlight.get(flight);
+    const data = await inFlight.get(flight);
     const current = cache.get(symbol);
-    if (!current || Date.now() - current.time >= cacheDurationMs || depthOf(company) >= depthOf(current.company)) cache.set(symbol, { time: Date.now(), company });
-    return sendJson(response, 200, company);
+    if (!current || Date.now() - current.time >= cacheDurationMs || DEPTHS[data.depth] >= DEPTHS[current.data.depth]) cache.set(symbol, { time: Date.now(), data });
+    return await respondWithCompany(response, symbol, data);
   } catch (error) {
-    if (saved && depthOf(saved.company) >= DEPTHS[depth]) return sendJson(response, 200, { ...saved.company, stale: true });
+    if (deepEnough) return respondWithCompany(response, symbol, saved.data, { stale: true }).catch(() => sendJson(response, 502, { error: 'Could not load market data.' }));
     const status = error instanceof ProviderError ? error.status : 502;
     return sendJson(response, status, { error: error instanceof ProviderError ? error.message : 'Could not load market data.' });
-  } finally {
-    inFlight.delete(flight);
   }
 }
 
@@ -216,7 +207,7 @@ http.createServer(async (request, response) => {
   }
   if (url.pathname === '/api/status') {
     if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
-    return sendJson(response, 200, { provider: 'FinancialData.net + SEC EDGAR', configured: Boolean(apiKey()), fundamentals: true, signOut: authRequired(), priceRequestsLeft: providerBudgetLeft() });
+    return sendJson(response, 200, { provider: 'Cboe + SEC EDGAR', configured: true, fundamentals: true, signOut: authRequired() });
   }
   if (url.pathname === '/api/company') return handleCompany(request, response, url);
   if (url.pathname === '/api/market') return handleMarket(request, response);

@@ -6,7 +6,7 @@ Live at [app.nathanielmann.ca](https://app.nathanielmann.ca/app) (password prote
 
 ## Setup
 
-Requires Node.js 20 or newer. There are no npm dependencies. To use real price data, copy `.env.local.example` to `.env.local` and fill in the values (see [Real market data](#real-market-data)). `.env.local` is git-ignored and must never be committed.
+Requires Node.js 20 or newer. There are no npm dependencies, and no API keys are needed. Optionally copy `.env.local.example` to `.env.local` to set a password or SEC user agent (see [Real market data](#real-market-data)). `.env.local` is git-ignored and must never be committed.
 
 ## Run
 
@@ -29,20 +29,11 @@ There is no build step. The browser loads `app.js`, `math.js` and the HTML/CSS a
 - Current P/E, normal (median) P/E, fair value, margin of safety, EPS growth, dividend yield, payout ratio and annualized return over the window.
 - Year-by-year table of diluted EPS, EPS change, dividends, payout ratio, price range and average P/E.
 - Editable five-year scenario (EPS growth and exit P/E) with implied price and total return.
-- Real U.S. companies loaded on demand, in three levels (below), plus CSV import.
-
-## Data levels
-
-**Load ticker** reads only SEC filings, so it uses no price requests. Two buttons next to the company name add prices when you want them:
-
-| Level | Price requests | Adds |
-| --- | --- | --- |
-| SEC only (default) | 0 | Growth, margins, ROIC, balance sheet, ten-year statements and DCF value |
-| Add current price | 1 | Market cap, EV, P/E, P/FCF, FCF yield, EV multiples, WACC weights and DCF vs. price |
-| Load price chart | up to 10 (1 to refresh) | Price-vs-earnings chart, normal P/E, window returns, scenario builder and beta |
-
-The sidebar shows how many of the day's price requests are left. Links can choose a level: `/app?ticker=AAPL&depth=full`.
+- Real U.S. companies loaded on demand, plus CSV import.
+- Prices for the open ticker and every holding refresh every minute while the tab is visible.
 - Holdings saved in the browser's local storage. Loaded tickers are cached in the browser for a week.
+
+**Load ticker** reads the SEC filings and the full price history together. If Cboe has no prices for a ticker, the SEC data still loads and a **Load prices** button lets you retry. Links open a company with prices (`/app?ticker=AAPL`) or with filings only (`/app?ticker=AAPL&depth=sec`).
 
 ## Real market data
 
@@ -50,7 +41,7 @@ Lettuce combines two sources on the server:
 
 | Data | Source | Notes |
 | --- | --- | --- |
-| Daily closing prices (split-adjusted) | [FinancialData.net](https://financialdata.net) free plan | Requires an API key. History starts in 2015. 300 requests per day. Each new ticker uses about 10. |
+| Daily closing prices (split-adjusted) and the latest quote | [Cboe](https://www.cboe.com) delayed-quote data (`cdn.cboe.com/api/global/delayed_quotes/…`) | No key, no quota. History from 2004 in one request; quotes are about 15 minutes delayed. Unofficial: it's the data behind Cboe's own site, so it may change without notice. |
 | Diluted EPS, dividends, revenue, margins, cash flow, debt, cash, equity, share counts, company name and industry | [SEC EDGAR](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) XBRL company facts | Free, no key. Covers U.S. companies that file 10-K/10-Q reports. |
 | 10-year Treasury yield (risk-free rate) and S&P 500 month-end values (for beta only) | [FRED](https://fred.stlouisfed.org) CSV downloads (`DGS10`, `SP500`) | Free, no key. Refreshed daily. |
 
@@ -71,19 +62,16 @@ Following `free_stock_dashboard_data_sources.md`, the server stores **raw** stat
   - WACC, and ROIC − WACC.
 - **DCF:** two-stage free cash flow per share. Five years at the chosen growth rate, five years fading to terminal growth, then a Gordon terminal value, discounted at WACC. All inputs are editable.
 - **Financial history:** ten fiscal years of the raw and derived values.
-- **Peers:** the same metrics for tickers you add. Each new peer costs one price request, because only the latest price is needed.
+- **Peers:** the same metrics for tickers you add.
 
 Trailing-twelve-month flows are last fiscal year + this year-to-date − the same year-to-date a year earlier.
 
 Setup:
 
-1. Get a FinancialData.net API key.
-2. Copy `.env.local.example` to `.env.local` and set `FINANCIALDATA_API_KEY`. Optionally set `SEC_USER_AGENT` to a name and contact email. The SEC asks automated clients to identify themselves this way.
-3. Restart the server, enter a ticker such as `MSFT`, and press **Load real ticker**.
+1. Optionally copy `.env.local.example` to `.env.local` and set `SEC_USER_AGENT` to a name and contact email. The SEC asks automated clients to identify themselves this way.
+2. Start the server, enter a ticker such as `MSFT`, and press **Load ticker**.
 
-Keys stay on the server and are never sent to the browser. Company results are cached in server memory for 24 hours.
-
-The server budgets 280 FinancialData.net requests a day, leaving headroom under the free plan's 300. Each visitor may spend 60 requests per hour. A new ticker costs about 10 requests. After that, the server keeps its daily price history in memory, so a refresh fetches only the newest page (1 request). If a split has restated the history, it refetches everything. When the budget runs out, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down, so the first load after that is a full fetch again.
+The server caches each company's filings and price history in memory for 24 hours. On top of that it fetches Cboe's quote at most once a minute per symbol, shared by every visitor, and rebuilds the latest month from it. Each visitor may load 60 uncached companies per hour. If Cboe or the SEC can't be reached, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down.
 
 ## Password
 
@@ -103,7 +91,7 @@ Limitations: earnings are GAAP, so one-time items such as write-downs or investm
 The repo includes `render.yaml` for a Render **web service** named `lattice-investment-tool`. Every push to `main` redeploys it. The homepage is a separate Render service with its own repository, so changes there never redeploy the tool.
 
 1. In Render, create a new **Blueprint** from the GitHub repository. It defines a free Node web service, runs the tests during build and checks `/health`.
-2. When prompted, set `FINANCIALDATA_API_KEY` and a strong `APP_PASSWORD`. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`. These secrets live only in Render's environment settings, never in the repository.
+2. When prompted, set a strong `APP_PASSWORD`. `FINANCIALDATA_API_KEY` is no longer used and can be left empty. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`. These secrets live only in Render's environment settings, never in the repository.
 3. The Blueprint adds `app.nathanielmann.ca` as a custom domain. Add the CNAME record Render shows at your DNS provider. Keep any unrelated records intact.
 
 Render runs the server on its assigned `PORT` and host `0.0.0.0`. The free service may spin down after inactivity, which clears the in-memory cache.
