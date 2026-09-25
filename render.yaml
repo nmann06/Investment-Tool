@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: lattice-investment-tool
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm test
+    startCommand: npm start
+    healthCheckPath: /health
+    domains:
+      - nathanielmann.ca
+    envVars:
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false

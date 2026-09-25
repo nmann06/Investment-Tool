@@ -1,0 +1,11 @@
+{
+  "name": "lattice-investment-tool",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "description": "Independent fundamentals-versus-price research prototype",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js"
+  }
+}
