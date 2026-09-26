@@ -46,7 +46,7 @@
 
   function setText(id, value) { $(id).textContent = value; }
   function showView(next) {
-    const views = ['research', 'fundamentals', 'portfolio', 'methodology'];
+    const views = ['research', 'fundamentals', 'compare', 'portfolio', 'methodology'];
     view = views.includes(next) ? next : 'research';
     for (const item of views) $(`${item}-view`).hidden = item !== view;
     document.querySelectorAll('.nav-link').forEach((link) => link.classList.toggle('active', link.dataset.view === view));
@@ -55,6 +55,7 @@
     if (view === 'portfolio') renderPortfolio();
     if (view === 'research' && currentResult) renderChart(currentResult);
     if (view === 'fundamentals') renderFundamentals();
+    if (view === 'compare') { renderCompare(); loadCompare(compareTickers); }
   }
 
   function renderChips(query = '') {
@@ -530,6 +531,108 @@
     peerMessage(failed.join(' '), failed.length ? 'error' : '');
   }
 
+  const compareFields = [
+    ['price', 'Latest price', (f) => money(f.price)],
+    ['marketCap', 'Market cap', (f) => compactMoney(f.valuation.marketCap)],
+    ['enterpriseValue', 'Enterprise value', (f) => compactMoney(f.valuation.ev)],
+    ['pe', 'P/E (TTM)', (f) => multiple(f.valuation.pe)],
+    ['pfcf', 'P/FCF (TTM)', (f) => multiple(f.valuation.pfcf)],
+    ['evEbitda', 'EV/EBITDA (TTM)', (f) => multiple(f.valuation.evEbitda)],
+    ['fcfYield', 'FCF yield (TTM)', (f) => plainPercent(f.valuation.fcfYield)],
+    ['revenue', 'Revenue (FY)', (f) => compactMoney(f.latestYear.revenue)],
+    ['revenueGrowth', 'Revenue CAGR (5 yr)', (f) => percent(f.growth.revenue5)],
+    ['epsGrowth', 'EPS CAGR (5 yr)', (f) => percent(f.growth.eps5)],
+    ['grossMargin', 'Gross margin (FY)', (f) => plainPercent(f.profitability.grossMargin)],
+    ['operatingMargin', 'Operating margin (FY)', (f) => plainPercent(f.profitability.operatingMargin)],
+    ['fcfMargin', 'FCF margin (FY)', (f) => plainPercent(f.profitability.fcfMargin)],
+    ['roic', 'ROIC (FY)', (f) => plainPercent(f.profitability.roic)],
+    ['freeCashFlow', 'Free cash flow (TTM)', (f) => compactMoney(f.valuation.ttmFcf)],
+    ['cash', 'Cash & short-term investments', (f) => compactMoney(f.balance.cash)],
+    ['debt', 'Total debt', (f) => compactMoney(f.balance.debt)],
+    ['netDebt', 'Net debt (cash)', (f) => compactMoney(f.balance.netDebt)]
+  ];
+  const defaultCompareFields = ['price', 'marketCap', 'pe', 'revenue', 'revenueGrowth', 'operatingMargin', 'fcfYield', 'roic'];
+  const storedCompareTickers = readStore('lattice.compare.tickers.v1', null);
+  let compareTickers = Array.isArray(storedCompareTickers)
+    ? [...new Set(storedCompareTickers.filter((ticker) => typeof ticker === 'string' && /^[A-Z0-9.\-]{1,12}$/.test(ticker)))].slice(0, 12)
+    : selectedTicker ? [selectedTicker] : [];
+  const storedCompareFields = readStore('lattice.compare.fields.v1', null);
+  let selectedCompareFields = Array.isArray(storedCompareFields)
+    ? storedCompareFields.filter((id) => compareFields.some(([field]) => field === id))
+    : defaultCompareFields;
+  const compareLoading = new Set();
+  const compareCompany = (ticker) => [companies[ticker], peerData[ticker]].filter((company) => company?.source === 'api' && hasStatements(company))
+    .sort((left, right) => depthOf(right) - depthOf(left))[0] || null;
+  function compareMessage(message, kind = '') {
+    $('compare-message').textContent = message;
+    $('compare-message').className = `api-message compare-message ${kind}`;
+  }
+
+  function renderCompare() {
+    $('compare-picks').innerHTML = compareTickers.length ? compareTickers.map((ticker) =>
+      `<span class="compare-chip">${escapeHtml(ticker)}<button type="button" data-remove-compare="${escapeHtml(ticker)}" aria-label="Remove ${escapeHtml(ticker)}">×</button></span>`
+    ).join('') : '<span class="company-meta">No companies selected yet.</span>';
+    $('compare-metrics').innerHTML = compareFields.map(([id, label]) =>
+      `<label><input type="checkbox" value="${id}" ${selectedCompareFields.includes(id) ? 'checked' : ''}>${label}</label>`
+    ).join('');
+    if (!compareTickers.length) {
+      $('compare-table').innerHTML = '<tbody><tr><td>Add a ticker to start comparing.</td></tr></tbody>';
+      return;
+    }
+    if (!selectedCompareFields.length) {
+      $('compare-table').innerHTML = '<tbody><tr><td>Select at least one metric to build the table.</td></tr></tbody>';
+      return;
+    }
+    const cells = compareTickers.map((ticker) => {
+      const company = compareCompany(ticker);
+      return { ticker, company, metrics: company ? fundamentalsFor(company, false) : null };
+    });
+    const header = cells.map(({ ticker, company, metrics }) => `<th scope="col"><strong>${escapeHtml(ticker)}</strong><small>${escapeHtml(company?.name || (compareLoading.has(ticker) ? 'Loading…' : 'Data unavailable'))}</small><small>${metrics ? `FY ${metrics.latestYear.year} · TTM ${escapeHtml(metrics.ttmEnd)}` : ''}</small></th>`).join('');
+    const rows = compareFields.filter(([id]) => selectedCompareFields.includes(id)).map(([, label, format]) =>
+      `<tr><th scope="row">${label}</th>${cells.map(({ metrics }) => `<td>${metrics ? format(metrics) : '—'}</td>`).join('')}</tr>`
+    ).join('');
+    $('compare-table').innerHTML = `<thead><tr><th scope="col">METRIC</th>${header}</tr></thead><tbody>${rows}</tbody>`;
+  }
+
+  async function addCompare() {
+    const raw = $('compare-input').value.trim().toUpperCase();
+    const tickers = [...new Set(raw.split(/[\s,]+/).filter(Boolean))];
+    if (!tickers.length || tickers.some((ticker) => !/^[A-Z0-9.\-]{1,12}$/.test(ticker))) { compareMessage('Enter valid ticker symbols, separated by commas.', 'error'); return; }
+    if (new Set([...compareTickers, ...tickers]).size > 12) { compareMessage('Compare up to 12 companies at a time.', 'error'); return; }
+    compareTickers = [...new Set([...compareTickers, ...tickers])];
+    saveStore('lattice.compare.tickers.v1', compareTickers);
+    $('compare-input').value = '';
+    compareMessage('');
+    renderCompare();
+    await loadCompare(tickers);
+  }
+
+  async function loadCompare(tickers) {
+    const failed = [];
+    for (const ticker of tickers) {
+      const cached = compareCompany(ticker);
+      if ((cached && (depthOf(cached) >= DEPTH.price || cached.priceError || peerData[ticker]?.priceError)) || compareLoading.has(ticker)) continue;
+      compareLoading.add(ticker);
+      renderCompare();
+      try {
+        const response = await fetch(`/api/company?symbol=${encodeURIComponent(ticker)}&depth=price`);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw Error(result.error || 'Could not load company data.');
+        if (!hasStatements(result)) throw Error('SEC financial statements are unavailable.');
+        peerData[ticker] = result;
+        saveStore('lattice.peerdata.v1', peerData);
+      } catch (error) {
+        failed.push(`${ticker}: ${error.message}`);
+        compareTickers = compareTickers.filter((item) => item !== ticker);
+        saveStore('lattice.compare.tickers.v1', compareTickers);
+      } finally {
+        compareLoading.delete(ticker);
+        if (view === 'compare') renderCompare();
+      }
+    }
+    compareMessage(failed.join(' '), failed.length ? 'error' : '');
+  }
+
   // Closest competitor for each ticker, compared on a ten-year record. Its data is cached with the peers.
   const rivals = readStore('lattice.rivals.v1', {});
   const rivalLoads = new Set();
@@ -653,6 +756,21 @@
   $('scenario-toggle').addEventListener('change', renderResearch);
   for (const id of ['erp-input', 'dcf-growth', 'dcf-terminal', 'dcf-discount']) $(id).addEventListener('input', renderFundamentals);
   $('peer-add').addEventListener('click', addPeers);
+  $('compare-add').addEventListener('click', addCompare);
+  $('compare-input').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addCompare(); } });
+  $('compare-picks').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-compare]');
+    if (!button) return;
+    compareTickers = compareTickers.filter((ticker) => ticker !== button.dataset.removeCompare);
+    saveStore('lattice.compare.tickers.v1', compareTickers);
+    renderCompare();
+  });
+  $('compare-metrics').addEventListener('change', (event) => {
+    if (!event.target.matches('input[type="checkbox"]')) return;
+    selectedCompareFields = [...$('compare-metrics').querySelectorAll('input:checked')].map((input) => input.value);
+    saveStore('lattice.compare.fields.v1', selectedCompareFields);
+    renderCompare();
+  });
   $('rival-set').addEventListener('click', () => setRival($('rival-input').value));
   $('rival-input').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); setRival($('rival-input').value); } });
   $('rival-picks').addEventListener('click', (event) => { const button = event.target.closest('[data-rival]'); if (button) setRival(button.dataset.rival); });

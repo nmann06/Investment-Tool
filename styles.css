@@ -19,3 +19,12 @@
 .site-mark span{color:#c9a54e}
 .app-name{font-family:Manrope,Arial,sans-serif;color:white;font-weight:800;font-size:25px;letter-spacing:-1.8px}
 @media(max-width:800px){.brand-row{justify-content:center;margin:0 0 46px}.app-name{display:none}}
+
+.compare-layout{display:grid;grid-template-columns:minmax(280px,1fr) minmax(340px,1.5fr);gap:16px;margin-bottom:16px}
+.compare-controls{padding:20px;min-width:0}
+.compare-controls p{color:#83a193;font-size:11px;line-height:1.5;margin:4px 0 14px}
+.compare-add{display:flex;gap:8px}.compare-add input{width:100%;min-width:0;border:1px solid #d8ede3;border-radius:6px;padding:9px 11px;color:#255740;font-size:12px}
+.compare-picks{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}.compare-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid #d3ebe0;border-radius:5px;background:#eef7f3;padding:6px 8px;color:#278659;font-size:11px;font-weight:800}.compare-chip button{border:0;background:none;color:#557b68;font-size:17px;line-height:1;padding:0 1px}
+.compare-message{margin:12px 0 0}.compare-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 16px}.compare-metrics label{display:flex;align-items:center;gap:7px;color:#456d59;font-size:11px;cursor:pointer}.compare-metrics input{accent-color:#30885f;flex:none}
+.compare-panel{margin-bottom:16px}.compare-table th:first-child{min-width:180px}.compare-table thead th:not(:first-child){min-width:135px}.compare-table th small{display:block;font-size:9px;letter-spacing:0;text-transform:none;font-weight:500;margin-top:3px}.compare-table tbody th{color:#255740;text-align:left;font-size:11px;padding:9px 10px;border-bottom:1px solid #f0f6f3;position:sticky;left:0;background:#fff}.compare-table tbody tr:hover th{background:#f8fcfa}.compare-note{color:#9ab5a8;font-size:10px;margin:14px 0 0}
+@media(max-width:900px){.compare-layout{grid-template-columns:1fr}}@media(max-width:560px){.compare-metrics{grid-template-columns:1fr}}
