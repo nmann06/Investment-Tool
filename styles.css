@@ -12,3 +12,10 @@
 .profile-source{font-size:10px;color:#a3bbb0;margin-top:12px}.profile-source a{color:#2f8a61}
 .rival-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:0 0 14px}.rival-summary:empty{display:none}.rival-stat{border:1px solid #eff6f3;border-radius:6px;padding:10px 12px;font-size:10px;color:#8ea99c}.rival-stat strong{display:block;font-size:12px;color:#2a5541;margin-top:4px;font-variant-numeric:tabular-nums}.rival-stat strong span{color:#9ab5a8;font-weight:600}
 .rival-table tr.metric-start td{border-top:2px solid #e9f2ee}.rival-table tr.rival td{background:#f7fbf9}.rival-table td:first-child{white-space:nowrap}.rival-table .ticker-tag{margin-left:4px}.rival-picks{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}.rival-picks:empty{display:none}.rival-note{grid-column:1/-1;font-size:10px;color:#9ab5a8}
+/* The app's top-left NM mark links back to the personal homepage. */
+.brand-row{display:flex;align-items:center;gap:16px;margin:0 12px 64px;white-space:nowrap}
+.site-home{display:inline-flex;align-items:center;flex:none}
+.site-mark{font-family:Arial,Helvetica,sans-serif;font-weight:900;font-size:26px;letter-spacing:-3px;color:#f5f3ec}
+.site-mark span{color:#c9a54e}
+.app-name{font-family:Manrope,Arial,sans-serif;color:white;font-weight:800;font-size:25px;letter-spacing:-1.8px}
+@media(max-width:800px){.brand-row{justify-content:center;margin:0 0 46px}.app-name{display:none}}
