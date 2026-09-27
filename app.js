@@ -40,14 +40,14 @@
   let selectedTicker = companies[storedTicker] ? storedTicker : Object.keys(companies)[0] || null;
   let selectedYears = 10;
   let multipleMode = 'graham';
-  let view = 'research';
+  let view = 'notes';
   let currentResult = null;
   let manualExitPe = false;
 
   function setText(id, value) { $(id).textContent = value; }
   function showView(next) {
-    const views = ['research', 'fundamentals', 'compare', 'portfolio', 'methodology'];
-    view = views.includes(next) ? next : 'research';
+    const views = ['notes', 'research', 'fundamentals', 'compare', 'portfolio', 'methodology'];
+    view = views.includes(next) ? next : 'notes';
     for (const item of views) $(`${item}-view`).hidden = item !== view;
     document.querySelectorAll('.nav-link').forEach((link) => link.classList.toggle('active', link.dataset.view === view));
     setText('breadcrumb-current', view.toUpperCase());
@@ -83,8 +83,6 @@
     try {
       const response = await fetch('/api/status');
       if (!response.ok) throw Error('Server unavailable');
-      const status = await response.json();
-      $('sign-out').hidden = !status.signOut;
       setText('sidebar-data-status', 'Market data connected');
       setText('sidebar-data-help', 'Prices from Cboe (about 15 minutes delayed, refreshed every minute); financials from SEC filings.');
     } catch {
@@ -817,7 +815,7 @@
     } finally { refreshing = false; }
   }
 
-  renderChips(); renderResearch(); renderPortfolio(); showView(location.hash.slice(1) || 'research'); checkApiStatus();
+  renderChips(); renderResearch(); renderPortfolio(); showView(location.hash.slice(1) || (new URLSearchParams(location.search).has('ticker') ? 'research' : 'notes')); checkApiStatus();
   // Shareable links: /app?ticker=AAPL opens that company with prices; add &depth=sec for filings only.
   const params = new URLSearchParams(location.search);
   const linked = (params.get('ticker') || '').trim().toUpperCase();

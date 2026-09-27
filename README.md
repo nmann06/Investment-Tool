@@ -2,11 +2,11 @@
 
 An independent, browser-based fundamentals-versus-price research tool in the spirit of FAST Graphs. It charts a company's share price against its earnings, shades an earnings-justified value (15× EPS, or the company's own normal P/E), shows dividends paid out of those earnings, projects a five-year scenario, and tracks manually entered holdings.
 
-Live at [app.nathanielmann.ca](https://app.nathanielmann.ca/app) (password protected). It is linked from Nathaniel Mann's homepage, [nathanielmann.ca](https://nathanielmann.ca), which lives in its own repository, [nmann06/homepage](https://github.com/nmann06/homepage).
+Live at [app.nathanielmann.ca](https://app.nathanielmann.ca/app). It is linked from Nathaniel Mann's homepage, [nathanielmann.ca](https://nathanielmann.ca), which lives in its own repository, [nmann06/homepage](https://github.com/nmann06/homepage).
 
 ## Setup
 
-Requires Node.js 20 or newer. There are no npm dependencies, and no API keys are needed. Optionally copy `.env.local.example` to `.env.local` to set a password or SEC user agent (see [Real market data](#real-market-data)). `.env.local` is git-ignored and must never be committed.
+Requires Node.js 20 or newer. There are no npm dependencies, and no API keys are needed. Optionally copy `.env.local.example` to `.env.local` to set an SEC user agent (see [Real market data](#real-market-data)). `.env.local` is git-ignored and must never be committed.
 
 ## Run
 
@@ -75,9 +75,9 @@ Setup:
 
 The server caches each company's filings and price history in memory for 24 hours. On top of that it fetches Cboe's quote at most once a minute per symbol, shared by every visitor, and rebuilds the latest month from it. Each visitor may load 60 uncached companies per hour. If Cboe or the SEC can't be reached, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down.
 
-## Password
+## Access and Notes
 
-The tool (`/app`) and its API require the password in `APP_PASSWORD`. Only the sign-in page and `/health` are public, and `/` redirects to `/app`. Visitors sign in once, and a signed session cookie keeps them in for 30 days. Changing the password signs everyone out. Failed attempts are limited to 10 per IP per 15 minutes. Locally the tool stays open if `APP_PASSWORD` is unset. On Render it is always locked, and it stays locked until the password is set.
+Lettuce and its API are public and require no password, including on Render. Any existing `APP_PASSWORD` setting is ignored. `/app` opens the Notes page, which explains the data flow and Canadian stock coverage. Sidebar links and direct ticker links still open their requested views.
 
 ### How the earnings line is built
 
@@ -93,7 +93,7 @@ Limitations: earnings are GAAP, so one-time items such as write-downs or investm
 The repo includes `render.yaml` for a Render **web service** named `lattice-investment-tool`. Every push to `main` redeploys it. The homepage is a separate Render service with its own repository, so changes there never redeploy the tool.
 
 1. In Render, create a new **Blueprint** from the GitHub repository. It defines a free Node web service, runs the tests during build and checks `/health`.
-2. When prompted, set a strong `APP_PASSWORD`. `FINANCIALDATA_API_KEY` is no longer used and can be left empty. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`. These secrets live only in Render's environment settings, never in the repository.
+2. `FINANCIALDATA_API_KEY` is no longer used and can be left empty. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`. These secrets live only in Render's environment settings, never in the repository.
 3. The Blueprint adds `app.nathanielmann.ca` as a custom domain. Add the CNAME record Render shows at your DNS provider. Keep any unrelated records intact.
 
 Render runs the server on its assigned `PORT` and host `0.0.0.0`. The free service may spin down after inactivity, which clears the in-memory cache.

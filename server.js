@@ -2,22 +2,16 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { fetchCompanyData, fetchQuote, fetchProfile, combine, fetchFredSeries, fetchFredLatest, monthlyPrices, ProviderError } = require('./provider');
-const auth = require('./auth');
 
 const root = __dirname;
-// The personal homepage is a separate site (github.com/nmann06/homepage).
-const HOMEPAGE = 'https://nathanielmann.ca/';
 const files = {
   '/app': ['research.html', 'text/html; charset=utf-8'],
   '/research.html': ['research.html', 'text/html; charset=utf-8'],
-  '/login.css': ['login.css', 'text/css; charset=utf-8'],
   '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/math.js': ['math.js', 'text/javascript; charset=utf-8'],
   '/sample-data.csv': ['sample-data.csv', 'text/csv; charset=utf-8']
 };
-// The investment tool and its API sit behind the password; only the sign-in page is public.
-const protectedFiles = new Set(['/app', '/research.html', '/styles.css', '/app.js', '/math.js', '/sample-data.csv']);
 const cache = new Map();
 const inFlight = new Map();
 let market = null;
@@ -30,7 +24,6 @@ const cacheDurationMs = 24 * 60 * 60 * 1000;
 const QUOTE_MS = 60 * 1000;
 const MAX_QUOTES = 500;
 const ipLookups = new Map();
-const failedLogins = new Map();
 
 function setting(name) {
   if (process.env[name]) return process.env[name].trim();
@@ -41,11 +34,6 @@ function setting(name) {
     return value === 'your_key_here' ? '' : value;
   } catch { return ''; }
 }
-const appPassword = () => setting('APP_PASSWORD');
-// Locally the tool is open unless a password is set. On Render it always requires one.
-const authRequired = () => Boolean(appPassword()) || Boolean(process.env.RENDER);
-const signedIn = (request) => !authRequired() || auth.sessionValid(auth.readCookie(request.headers.cookie), appPassword());
-
 function clientIp(request) {
   return process.env.RENDER ? String(request.headers['x-forwarded-for'] || request.socket.remoteAddress).split(',')[0].trim() : request.socket.remoteAddress;
 }
@@ -58,52 +46,6 @@ function sendJson(response, status, payload) {
 function redirect(response, location, headers = {}) {
   response.writeHead(303, { Location: location, 'Cache-Control': 'no-store', ...headers });
   response.end();
-}
-
-const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-function sendLogin(response, status, next, error = '') {
-  const html = fs.readFileSync(path.join(root, 'login.html'), 'utf8').replace('{{NEXT}}', escapeHtml(next)).replace('{{ERROR}}', escapeHtml(error));
-  response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' });
-  response.end(html);
-}
-
-function readForm(request, limit = 1024) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    request.setEncoding('utf8');
-    request.on('data', (chunk) => { body += chunk; if (body.length > limit) { reject(Error('Too large')); request.destroy(); } });
-    request.on('end', () => resolve(new URLSearchParams(body)));
-    request.on('error', reject);
-  });
-}
-
-function recentFailures(ip, now = Date.now()) {
-  const recent = (failedLogins.get(ip) || []).filter((time) => time > now - 15 * 60000);
-  failedLogins.set(ip, recent);
-  return recent;
-}
-
-async function handleLogin(request, response, url) {
-  if (request.method === 'GET') {
-    const next = auth.safeNext(url.searchParams.get('next'));
-    return signedIn(request) ? redirect(response, next) : sendLogin(response, 200, next);
-  }
-  if (request.method !== 'POST') return sendJson(response, 405, { error: 'Method not allowed.' });
-  let form;
-  try { form = await readForm(request); } catch { return sendJson(response, 413, { error: 'Request too large.' }); }
-  const next = auth.safeNext(form.get('next'));
-  const password = appPassword();
-  if (!password) return sendLogin(response, 503, next, 'The site password has not been configured on the server.');
-  const ip = clientIp(request);
-  const failures = recentFailures(ip);
-  if (failures.length >= 10) return sendLogin(response, 429, next, 'Too many attempts. Try again in 15 minutes.');
-  if (!auth.passwordMatches(form.get('password') || '', password)) {
-    failures.push(Date.now());
-    return sendLogin(response, 401, next, 'That password is not correct.');
-  }
-  failedLogins.delete(ip);
-  const cookie = `${auth.COOKIE}=${auth.makeSession(password)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${auth.SESSION_MS / 1000}${process.env.RENDER ? '; Secure' : ''}`;
-  return redirect(response, next, { 'Set-Cookie': cookie });
 }
 
 // Cboe and the SEC have no quota, but uncached company loads are still limited to 60 per visitor per hour
@@ -224,17 +166,11 @@ async function handleProfile(request, response, url) {
 http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   if (url.pathname === '/health') return sendJson(response, 200, { ok: true });
-  if (url.pathname === '/login') return handleLogin(request, response, url);
+  if (url.pathname === '/login' || url.pathname === '/logout') return redirect(response, '/app');
   if (url.pathname === '/') return redirect(response, `/app${url.search}`);
-  if (url.pathname === '/logout') return redirect(response, HOMEPAGE, { 'Set-Cookie': `${auth.COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0` });
-  const isApi = url.pathname.startsWith('/api/');
-  if ((isApi || protectedFiles.has(url.pathname)) && !signedIn(request)) {
-    if (isApi) return sendJson(response, 401, { error: 'Your session has ended. Reload the page to sign in again.' });
-    return redirect(response, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
-  }
   if (url.pathname === '/api/status') {
     if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
-    return sendJson(response, 200, { provider: 'Cboe + SEC EDGAR', configured: true, fundamentals: true, signOut: authRequired() });
+    return sendJson(response, 200, { provider: 'Cboe + SEC EDGAR', configured: true, fundamentals: true, signOut: false });
   }
   if (url.pathname === '/api/company') return handleCompany(request, response, url);
   if (url.pathname === '/api/market') return handleMarket(request, response);
