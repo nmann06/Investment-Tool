@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSplits, buildFundamentals, valueAt, withQuote, combine, fetchPrices, fetchQuote, fetchCompany, htmlText, businessSection, businessSummary } = require('../provider.js');
+const { detectSplits, buildFundamentals, valueAt, withQuote, weeklyPrices, combine, fetchPrices, fetchQuote, fetchCompany, htmlText, businessSection, businessSummary } = require('../provider.js');
 
 const respond = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
 
@@ -72,6 +72,15 @@ test('fundamentals are restated to today\'s share basis with a derived fourth qu
   // Q2-2023..Q1-2024: 1.1 + 1.2 + (4.6 - 3.3) + 1.3
   assert.ok(Math.abs(ttm.get('2024-03-31') - 4.9) < 1e-9);
   assert.ok(Math.abs(ttm.get('2024-06-30') - 5.2) < 1e-9);
+});
+
+test('daily closes collapse to the last trading day of each week and month', () => {
+  // Thu 2024-02-29 ends February mid-week; Fri 2024-03-08 ends the next full week; the history stops on Tue 2024-03-12.
+  const daily = ['2024-02-26', '2024-02-27', '2024-02-28', '2024-02-29', '2024-03-01', '2024-03-04', '2024-03-05', '2024-03-08', '2024-03-11', '2024-03-12']
+    .map((date, index) => ({ date, close: 100 + index }));
+  assert.deepEqual(weeklyPrices(daily).map((row) => row.date), ['2024-02-29', '2024-03-01', '2024-03-08', '2024-03-12']);
+  assert.deepEqual(weeklyPrices(daily).at(-1), { date: '2024-03-12', price: 109 });
+  assert.deepEqual(weeklyPrices([{ date: '2024-01-01', close: 0 }, { date: 'bad', close: 5 }]), []);
 });
 
 test('TTM values interpolate between quarter ends and hold after the latest report', () => {

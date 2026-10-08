@@ -24,13 +24,13 @@ There is no build step. The browser loads `app.js`, `math.js` and the HTML/CSS a
 
 ## Features
 
-- FAST Graphs-style chart: month-end price, an orange earnings area (trailing EPS × 15 or × normal P/E), a green dividend area, a normal-P/E line and an optional dashed five-year scenario.
+- FAST Graphs-style chart: weekly closing price (plus each month-end close), an orange earnings area (trailing EPS × 15 or × normal P/E), a green dividend area, a normal-P/E line and an optional dashed five-year scenario.
 - 3, 5, 10-year and maximum chart windows.
 - Current P/E, normal (median) P/E, fair value, margin of safety, EPS growth, dividend yield, payout ratio and annualized return over the window.
 - Year-by-year table of diluted EPS, EPS change, dividends, payout ratio, price range and average P/E.
 - Editable five-year scenario (EPS growth and exit P/E) with implied price and total return.
 - **What the company does**, first on the Research page: the opening of "Item 1. Business" from the latest 10-K, with the full section and a link to the filing. Cached for a day on the server and 30 days in the browser.
-- **Head to head** on the Fundamentals page: ten fiscal years of net income, diluted EPS, dividends per share and year-end share price for the company and its closest competitor, with growth rates for each. Fiscal years are matched by label, and the year-end price is the month-end close nearest each fiscal year end.
+- **Head to head** on the Fundamentals page: ten fiscal years of net income, diluted EPS, dividends per share and year-end share price for the company and its closest competitor, with growth rates for each. Fiscal years are matched by label, and the year-end price is the close nearest each fiscal year end.
 - Real U.S. companies loaded on demand, plus CSV import.
 - Prices for the open ticker and every holding refresh every minute while the tab is visible.
 - Holdings saved in the browser's local storage. Loaded tickers are cached in the browser for a week.
@@ -43,7 +43,7 @@ Lettuce combines two sources on the server:
 
 | Data | Source | Notes |
 | --- | --- | --- |
-| Daily closing prices (split-adjusted) and the latest quote | [Cboe](https://www.cboe.com) delayed-quote data (`cdn.cboe.com/api/global/delayed_quotes/…`) | No key, no quota. History from 2004 in one request; quotes are about 15 minutes delayed. Unofficial: it's the data behind Cboe's own site, so it may change without notice. |
+| Daily closing prices (split-adjusted) and the latest quote | [Cboe](https://www.cboe.com) delayed-quote data (`cdn.cboe.com/api/global/delayed_quotes/…`) | No key, no quota. History from 2004 in one request, kept as weekly and month-end closes; quotes are about 15 minutes delayed. Unofficial: it's the data behind Cboe's own site, so it may change without notice. |
 | Diluted EPS, dividends, revenue, margins, cash flow, debt, cash, equity, share counts, company name and industry | [SEC EDGAR](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) XBRL company facts | Free, no key. Covers U.S. companies that file 10-K/10-Q reports. |
 | 10-year Treasury yield (risk-free rate) and S&P 500 month-end values (for beta only) | [FRED](https://fred.stlouisfed.org) CSV downloads (`DGS10`, `SP500`) | Free, no key. Refreshed daily. |
 
@@ -73,7 +73,7 @@ Setup:
 1. Optionally copy `.env.local.example` to `.env.local` and set `SEC_USER_AGENT` to a name and contact email. The SEC asks automated clients to identify themselves this way.
 2. Start the server, enter a ticker such as `MSFT`, and press **Load ticker**.
 
-The server caches each company's filings and price history in memory for 24 hours. On top of that it fetches Cboe's quote at most once a minute per symbol, shared by every visitor, and rebuilds the latest month from it. Each visitor may load 60 uncached companies per hour. If Cboe or the SEC can't be reached, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down.
+The server caches each company's filings and price history in memory for 24 hours. On top of that it fetches Cboe's quote at most once a minute per symbol, shared by every visitor, and uses it as the latest point. Each visitor may load 60 uncached companies per hour. If Cboe or the SEC can't be reached, previously loaded companies are served from the last fetch with a notice. Render's free plan clears memory when the service spins down.
 
 ## Access and Notes
 

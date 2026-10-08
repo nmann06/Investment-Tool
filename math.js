@@ -45,10 +45,11 @@
     const dividend = finite(last.dividend) && last.dividend > 0 ? last.dividend : 0;
     const dividendYield = dividend / last.price;
     const payoutRatio = dividend > 0 && last.eps > 0 ? dividend / last.eps : null;
-    // Total return assumes dividends are received but not reinvested; each month earns 1/12 of the trailing dividend.
+    // Total return assumes dividends are received but not reinvested; each observation earns the trailing dividend
+    // for the time since the one before, so weekly, monthly and imported rows all count a year's dividend once a year.
     const first = period[0];
     const elapsed = yearsBetween(first.date, last.date);
-    const dividendsReceived = period.slice(1).reduce((sum, row) => sum + (finite(row.dividend) && row.dividend > 0 ? row.dividend / 12 : 0), 0);
+    const dividendsReceived = period.slice(1).reduce((sum, row, index) => sum + (finite(row.dividend) && row.dividend > 0 ? row.dividend * yearsBetween(period[index].date, row.date) : 0), 0);
     const priceReturn = cagr(first.price, last.price, elapsed);
     const totalReturn = cagr(first.price, last.price + dividendsReceived, elapsed);
     const projectionPe = finite(exitPe) && exitPe > 0 ? exitPe : normalPe;
@@ -83,7 +84,8 @@
       return {
         ...item,
         epsChange,
-        partial: inYear.length < 11,
+        // Under ten months between the first and last close in the year (eleven month-ends, or about 44 weeks).
+        partial: !inYear.length || yearsBetween(inYear[0].date, inYear[inYear.length - 1].date) < 10 / 12 - 0.01,
         high: inYear.length ? Math.max(...inYear.map((row) => row.price)) : null,
         low: inYear.length ? Math.min(...inYear.map((row) => row.price)) : null,
         averagePe: ratios.length ? ratios.reduce((sum, value) => sum + value, 0) / ratios.length : null
@@ -92,8 +94,8 @@
   }
 
   // Fiscal-year net income, EPS, dividends and year-end share price for the ten-year record.
-  // The year-end price is the month-end close nearest the fiscal year end, within 20 days either way:
-  // many fiscal years end on a Saturday a few days before the month's last trading day.
+  // The year-end price is the close nearest the fiscal year end, within 20 days either way. Rows hold weekly and
+  // month-end closes, so a fiscal year ending on a Saturday takes the Friday before it.
   function yearRecord(company) {
     const rows = (company.rows || []).filter((row) => finite(row.price));
     const years = (company.annual || []).filter((item) => item && item.end).slice().sort((a, b) => a.end.localeCompare(b.end));

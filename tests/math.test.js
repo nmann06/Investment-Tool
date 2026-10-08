@@ -44,6 +44,17 @@ test('annual summary reports EPS change, price range and average PE per fiscal y
   assert.equal(second.averagePe, 20);
 });
 
+test('dividends in the total return count once a year whatever the row spacing', () => {
+  // Flat price, $1 trailing dividend: two years of weekly or monthly rows both receive about $2.
+  const start = Date.UTC(2022, 0, 7);
+  const weekly = Array.from({ length: 105 }, (_, i) => ({ date: new Date(start + i * 7 * 86400000).toISOString().slice(0, 10), price: 100, eps: 5, dividend: 1 }));
+  const monthly = Array.from({ length: 25 }, (_, i) => ({ date: new Date(Date.UTC(2022, i, 1)).toISOString().slice(0, 10), price: 100, eps: 5, dividend: 1 }));
+  for (const rows of [weekly, monthly]) {
+    const result = calculate(rows, 5);
+    assert.ok(Math.abs(result.totalReturn - (Math.pow(102 / 100, 1 / result.elapsed) - 1)) < 0.0005, rows.length);
+  }
+});
+
 test('median handles odd and even sample counts', () => {
   assert.equal(median([3, 1, 2]), 2);
   assert.equal(median([4, 1, 3, 2]), 2.5);

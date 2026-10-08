@@ -29,8 +29,8 @@
   // Real tickers are kept for a week so holdings and the last research session survive a reload.
   const apiCache = readStore('lattice.api.v1', {});
   for (const [ticker, company] of Object.entries(apiCache)) {
-    // Entries saved before statement data was added (no `ttm`) are refetched.
-    if (company && Array.isArray(company.rows) && company.hasFundamentals && 'ttm' in company && Date.now() - Date.parse(company.fetchedAt) < API_CACHE_MS) companies[ticker] = company;
+    // Entries saved before statement data was added (no `ttm`) or before weekly prices are refetched.
+    if (company && Array.isArray(company.rows) && company.hasFundamentals && 'ttm' in company && (company.depth === 'sec' || company.interval === 'week') && Date.now() - Date.parse(company.fetchedAt) < API_CACHE_MS) companies[ticker] = company;
     else delete apiCache[ticker];
   }
   saveStore('lattice.api.v1', apiCache);
@@ -212,12 +212,12 @@
     $('annual-panel').hidden = priceOnly;
     setText('chart-heading', priceOnly ? 'Historical share price' : 'Price vs. earnings');
     const range = result ? `${result.period[0].date.slice(0, 7)} to ${result.latest.date.slice(0, 7)}` : '';
-    setText('chart-subtitle', priceOnly ? `Monthly closing observations · ${range}` : `Does the price follow the earnings? · ${range}`);
+    setText('chart-subtitle', priceOnly ? `Closing prices · ${range}` : `Does the price follow the earnings? · ${range}`);
     $('growth-input').disabled = priceOnly;
     $('exit-pe-input').disabled = priceOnly;
     setText('chart-footnote', company.methodologyNote || 'Normal P/E is the median observed P/E within the selected period. Prices and EPS must use the same share basis.');
     setText('metric-price', money(result?.latest.price));
-    setText('metric-price-date', !result ? 'No valid data' : company.quote?.date === result.latest.date ? `Delayed quote, ${quoteTime(company.quote)}` : `Month-end close, ${result.latest.date}`);
+    setText('metric-price-date', !result ? 'No valid data' : company.quote?.date === result.latest.date ? `Delayed quote, ${quoteTime(company.quote)}` : `Close, ${result.latest.date}`);
     setText('metric-current-pe', result?.currentPe == null ? '—' : `${number(result.currentPe)}×`);
     setText('metric-normal-pe', result?.normalPe == null ? '—' : `${number(result.normalPe)}×`);
     setText('metric-observations', priceOnly ? 'Requires EPS history' : result ? `Median of ${result.observationCount} months in range` : 'Historical median');
@@ -341,7 +341,7 @@
     const cutoff = result.period[0].date;
     const years = M.annualSummary(company.rows, company.annual).filter((item) => item.end >= cutoff);
     if (!years.length) { table.innerHTML = '<tbody><tr><td>No full fiscal years in this window.</td></tr></tbody>'; return; }
-    setText('annual-subtitle', company.annual?.length ? 'Fiscal years from SEC filings, on today\'s share basis. Price high/low from month-end closes.' : 'Calendar years; EPS and dividends are the trailing values at year end.');
+    setText('annual-subtitle', company.annual?.length ? 'Fiscal years from SEC filings, on today\'s share basis. Price high/low from weekly closes.' : 'Calendar years; EPS and dividends are the trailing values at year end.');
     const cell = (item, value) => `<td class="${item.partial ? 'partial' : ''}">${value}</td>`;
     const row = (label, render) => `<tr><td>${label}</td>${years.map((item) => cell(item, render(item))).join('')}</tr>`;
     table.innerHTML = `<thead><tr><th>${company.annual?.length ? 'FISCAL YEAR' : 'YEAR'}</th>${years.map((item) => `<th title="Period ending ${escapeHtml(item.end)}">${item.partial ? `${item.year}*` : item.year}</th>`).join('')}</tr></thead><tbody>${[

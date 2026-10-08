@@ -67,15 +67,31 @@ function durationKind(start, end) {
   return null;
 }
 
-// Collapses daily closes to the last trading day of each month.
-function monthlyPrices(records) {
-  const valid = records
+function validCloses(records) {
+  return records
     .map((item) => ({ date: item.date, price: finiteNumber(item.close) }))
     .filter((item) => validDate(item.date) && item.price != null && item.price > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Collapses daily closes to the last trading day of each month.
+function monthlyPrices(records) {
   const monthly = new Map();
-  for (const row of valid) monthly.set(row.date.slice(0, 7), row);
+  for (const row of validCloses(records)) monthly.set(row.date.slice(0, 7), row);
   return [...monthly.values()];
+}
+
+// Monday of the date's week, so every trading day from Monday to Friday shares a key.
+const weekOf = (date) => new Date(time(date) - ((new Date(time(date)).getUTCDay() + 6) % 7) * DAY).toISOString().slice(0, 10);
+
+// The last trading day of each week, plus each month-end close, so short chart windows have about 52 points a year
+// and fiscal year ends still land on an exact month-end price.
+function weeklyPrices(records) {
+  const valid = validCloses(records);
+  return valid.filter((row, index) => {
+    const next = valid[index + 1];
+    return !next || weekOf(next.date) !== weekOf(row.date) || next.date.slice(0, 7) !== row.date.slice(0, 7);
+  });
 }
 
 // Duration facts (income statement, cash flow, per-share) from 10-K/10-Q filings with a usable period length.
@@ -301,7 +317,7 @@ function buildFundamentals(usGaap, dei = null) {
   return { eps, dividends, annual, splits, paysDividends: dividendFacts.length > 0, ttm: statements.ttm, balance: statements.balance, sharesOutstanding: statements.sharesOutstanding };
 }
 
-// The latest quote replaces any bar on or after its trading date, so the current month ends at the live price.
+// The latest quote replaces any bar on or after its trading date, so the chart ends at the live price.
 function withQuote(records, quote) {
   if (!quote || records.some((row) => row.date > quote.date)) return records;
   return [...records.filter((row) => row.date < quote.date), { date: quote.date, close: quote.price }];
@@ -309,10 +325,10 @@ function withQuote(records, quote) {
 
 // depth: 'sec' has no prices, 'full' has all available history plus the latest quote.
 function combine({ symbol, name, sector, prices, fundamentals, quote = null, priceError = null, depth = 'full', fetchedAt = new Date().toISOString() }) {
-  const monthly = depth === 'sec' ? [] : monthlyPrices(withQuote(prices, quote));
-  if (depth !== 'sec' && monthly.length < 2) throw new ProviderError(`Not enough price history was found for ${symbol}. Check the ticker.`, 404);
+  const closes = depth === 'sec' ? [] : weeklyPrices(withQuote(prices, quote));
+  if (depth !== 'sec' && closes.length < 2) throw new ProviderError(`Not enough price history was found for ${symbol}. Check the ticker.`, 404);
   const { eps, dividends, annual, splits, paysDividends, ttm, balance, sharesOutstanding } = fundamentals;
-  const rows = monthly.map((row) => {
+  const rows = closes.map((row) => {
     const ttmEps = valueAt(eps, row.date);
     const ttmDividend = paysDividends ? valueAt(dividends, row.date) : 0;
     return { date: row.date, price: row.price, eps: ttmEps == null ? null : +ttmEps.toFixed(4), dividend: ttmDividend == null ? 0 : +Math.max(0, ttmDividend).toFixed(4) };
@@ -325,6 +341,7 @@ function combine({ symbol, name, sector, prices, fundamentals, quote = null, pri
     sector: sector || 'Unclassified',
     source: 'api',
     depth,
+    interval: depth === 'sec' ? null : 'week',
     provider: depth === 'sec' ? 'SEC EDGAR' : 'Cboe + SEC EDGAR',
     currency: 'USD',
     hasFundamentals: true,
@@ -337,7 +354,7 @@ function combine({ symbol, name, sector, prices, fundamentals, quote = null, pri
     quote: depth === 'sec' ? null : quote,
     priceError,
     fetchedAt,
-    methodologyNote: `Month-end closing prices (split-adjusted) from Cboe, with the current month at the latest delayed quote. Trailing diluted EPS and dividends per share from SEC 10-K/10-Q filings, restated to today's share basis and interpolated between quarter ends.${splitNote}`
+    methodologyNote: `Weekly and month-end closing prices (split-adjusted) from Cboe, with the latest point at the delayed quote. Trailing diluted EPS and dividends per share from SEC 10-K/10-Q filings, restated to today's share basis and interpolated between quarter ends.${splitNote}`
   };
 }
 
@@ -517,4 +534,4 @@ async function fetchCompany(symbol, options = {}) {
   return combine({ ...data, quote });
 }
 
-module.exports = { ProviderError, monthlyPrices, detectSplits, adjustedPeriods, trailingSeries, latestTtm, valueAt, buildFundamentals, withQuote, combine, fetchPrices, fetchQuote, fetchFredSeries, fetchFredLatest, fetchCompanyData, fetchCompany, htmlText, businessSection, businessSummary, fetchProfile };
+module.exports = { ProviderError, monthlyPrices, weeklyPrices, detectSplits, adjustedPeriods, trailingSeries, latestTtm, valueAt, buildFundamentals, withQuote, combine, fetchPrices, fetchQuote, fetchFredSeries, fetchFredLatest, fetchCompanyData, fetchCompany, htmlText, businessSection, businessSummary, fetchProfile };
