@@ -1,6 +1,6 @@
 # Lettuce
 
-A free research tool for long-term investors. It charts a company's share price against its real earnings and dividends from SEC filings, so you can see whether a stock looks cheap or expensive compared with its own history.
+Lettuce is a free research tool for long-term investors. It charts a company's share price against its real earnings and dividends from SEC filings, so you can see whether a stock looks cheap or expensive compared with its own history.
 
 **Try it at [app.nathanielmann.ca/app](https://app.nathanielmann.ca/app).**
 
@@ -8,9 +8,12 @@ A free research tool for long-term investors. It charts a company's share price 
 
 ## Why I built it
 
-I made an investment tool focused on providing information to be used for choosing stable long-term investments. It is an independent take on fundamentals-versus-price charts in the spirit of FAST Graphs, built entirely on free data. The branding, interface and valuation calculations are original, and no competitor data or code is used.
+I made an investment tool focused on providing information to be used for choosing stable long-term investments. It is an independent take on fundamentals-versus-price charts like FAST Graphs, built entirely on free data. The branding, interface and valuation calculations are original, and no competitor data or code is used.
 
-## Features
+
+
+
+## Business stuff
 
 - **Price vs. earnings chart:** weekly closing price, an orange earnings area (trailing EPS × 15 or × the company's normal P/E), a green dividend area, a normal-P/E line and an optional five-year scenario. Windows of 3, 5 and 10 years or the full history.
 - **Valuation at a glance:** current and normal P/E, fair value, margin of safety, EPS growth, dividend yield, payout ratio and annualized return.
@@ -25,9 +28,9 @@ I made an investment tool focused on providing information to be used for choosi
 
 | Part | Tech |
 | --- | --- |
-| Server | Node.js 20 using only built-in modules (no npm dependencies) |
+| Server | Node.js 20 using only built-in modules [(no npm dependencies)](#no npm dependencies |
 | Browser | Vanilla JavaScript, HTML, CSS and SVG charts. No build step. |
-| Data | SEC EDGAR (filings), Cboe (prices) and FRED (Treasury yield and S&P 500). None need an API key. |
+| Data | SEC EDGAR (filings), Cboe (prices) and FRED (Treasury yield and S&P 500). None use an API key. |
 | Hosting | A Render web service at `app.nathanielmann.ca` |
 | Tests | Node's built-in test runner (`node --test`) |
 
@@ -39,7 +42,7 @@ I made an investment tool focused on providing information to be used for choosi
 | Diluted EPS, dividends, revenue, margins, cash flow, debt, cash, equity, share counts, company name and industry | [SEC EDGAR](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) XBRL company facts | Free, no key. Covers U.S. companies that file 10-K and 10-Q reports. |
 | 10-year Treasury yield (risk-free rate) and S&P 500 month-end values (for beta only) | [FRED](https://fred.stlouisfed.org) CSV downloads (`DGS10`, `SP500`) | Free, no key. Refreshed daily. |
 
-The server stores **raw** statement values, and every ratio is calculated in `math.js`. Keyless sources are used wherever possible. Alpha Vantage, Finnhub and FMP are not used. SEC filings cover everything they would have supplied except analyst estimates, which have no free source. Peers are entered by hand, since automatic peer lists need a keyed API.
+The server stores **raw** statement values, and every ratio is calculated in `math.js`. Keyless sources are used wherever possible (everything currently). SEC filings cover everything they would have supplied except analyst estimates, which have no free source. Peers are entered by hand, since automatic peer lists need a keyed API.
 
 **Caching and limits.** The server caches each company's filings and price history in memory for 24 hours. It fetches Cboe's quote at most once a minute per symbol, shared by every visitor, and uses it as the latest point. Each visitor may load 60 uncached companies per hour. If Cboe or the SEC can't be reached, previously loaded companies are served from the last fetch with a notice. In the browser, loaded tickers are cached for a week and the company description for 30 days.
 
@@ -49,6 +52,10 @@ The server stores **raw** statement values, and every ratio is calculated in `ma
 2. **Detect stock splits.** Companies restate earlier per-share figures after a split. When at least two periods are restated by the same clean ratio (2, 3, 4, 10, 20, 50…), that is treated as a split occurring by the first restating filing. Every figure filed before a split is divided by the split ratio, so everything is on today's share basis, matching the split-adjusted prices.
 3. For each period, keep the most recently filed value. Derive the fourth quarter as the fiscal year minus the nine-month year-to-date figure.
 4. Trailing-twelve-month EPS at each quarter end is the fiscal-year figure (at year end) or the sum of four contiguous quarters. Values are linearly interpolated between quarter ends, like a blended P/E, and held flat after the latest report.
+
+## Why no npm dependencies?
+The main reaoson is that I'd seen security issues regarding them on the news or projects/products crashing because of dependencies being removed. The hard parts (SEC XBRL tags, detecting stock splits and calculating trailing EPS)of Lettuce wouldnt have used dependencies anyways, so it wasnt that much harder. In hindsight it also makes the render deploys a little faster and more simple.
+
 
 ## Run locally
 
@@ -125,7 +132,7 @@ Lettuce and its API are public and require no password, including on Render. Any
 
 ## Deploy on Render
 
-The repo includes `render.yaml` for a Render **web service** named `lattice-investment-tool`. Every push to `main` redeploys it. The homepage, [nathanielmann.ca](https://nathanielmann.ca), is a separate Render service in its own repository, [nmann06/homepage](https://github.com/nmann06/homepage), so changes there never redeploy the tool.
+The repo includes `render.yaml` for a Render **web service** named `investment-tool`. Every push to `main` redeploys it. The homepage, [nathanielmann.ca](https://nathanielmann.ca), is a separate Render service in its own repository, [nmann06/homepage](https://github.com/nmann06/homepage), so changes there never redeploy the tool.
 
 1. In Render, create a new **Blueprint** from the GitHub repository. It defines a free Node web service, runs the tests during build and checks `/health`.
 2. `FINANCIALDATA_API_KEY` is no longer used and can be left empty. Set `SEC_USER_AGENT` to something like `Lettuce research you@example.com`. These values live only in Render's environment settings, never in the repository.
